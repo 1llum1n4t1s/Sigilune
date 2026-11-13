@@ -1,0 +1,55 @@
+version: 2
+updates:
+  # ワークスペース全体（crates/*）の Cargo.toml と Cargo.lock。
+  # ssign-core は "=0.1.8" の完全一致で固定しているため、版を上げる PR は本番アカウントでの
+  # exe / MSIX の署名・独立検証をやり直してから取り込む（AGENTS.md の「変更時の注意」）。
+  # そのため ssign-core と、ssign-core と版を揃える reqwest はグループに入れず単独の PR にする。
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        exclude-patterns: ["ssign-core", "reqwest"]
+        update-types: ["minor", "patch"]
+
+  # rust-toolchain.toml の Rust 版。
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+
+  # sigilune-manifest.exe（net48）の参照アセンブリ。
+  - package-ecosystem: "nuget"
+    directory: "/dotnet/Sigilune.Manifest"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      nuget-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # .github/workflows の actions（コミット SHA 固定のまま更新される）。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
