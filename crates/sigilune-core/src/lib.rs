@@ -6,6 +6,7 @@
 //! - [`signer`]     : ダイジェスト署名のバックエンド（クラウド／テスト用ローカル鍵）と中間証明書
 //! - [`signtool`]   : Windows SDK の signtool を `/dlib` 付きで起動する
 //! - [`verify`]     : WinVerifyTrust による署名者・タイムスタンプの検証
+//! - [`manifest`]   : ClickOnce / VSTO マニフェストの XML 署名（補助ツール sigilune-manifest.exe を呼ぶ）
 //!
 //! クラウドとの HTTPS 通信は `ssign-core`（MIT, Le-Syl21/ssign）の公開関数に任せる。
 //! そのトークンキャッシュは平文ファイルのため使わず、本 crate のセッション層で置き換える。
@@ -17,6 +18,7 @@
 pub mod cert;
 pub mod credential;
 pub mod dpapi;
+pub mod manifest;
 pub mod paths;
 pub mod session;
 pub mod signer;

@@ -14,6 +14,10 @@ cargo build --release           # 配布用（target\release\sigilune.exe と si
 cargo fmt --all --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked             # 単体テスト＋テスト鍵での signtool /dlib 結合テスト（exe/msi/ps1/msix）
+
+# マニフェスト署名の補助ツール（net48。.NET SDK だけでビルドできる）と mage.exe との一致テスト
+dotnet build dotnet/Sigilune.Manifest/Sigilune.Manifest.csproj -c Release -o <出力先>
+pwsh -File tests/Test-ManifestSigning.ps1 -Tool <出力先>\sigilune-manifest.exe -WorkDirectory <空の作業フォルダー>
 ```
 
 - toolchain は `rust-toolchain.toml` で固定する。
@@ -35,4 +39,5 @@ cargo test --locked             # 単体テスト＋テスト鍵での signtool 
 - `ssign-core` の版を上げるときは、本番アカウントで exe と MSIX の署名・独立検証をやり直してから固定を更新する。
 - dlib の FFI 契約（`HeapAlloc(GetProcessHeap())`、証明書の所有権移譲、SHA-256 のみ、パニック捕捉）を崩さない。
 - セッションの排他・TOTP 時間枠の記録・自動再試行なしを崩さない（並列署名と Certum のコード再利用拒否に対応するため）。
+- `dotnet/Sigilune.Manifest` は MSBuild の `mansign2.cs`（MIT）の移植。署名 XML の組み立て順序と改行の扱いを変えると `mage.exe` との一致テストが崩れるので、変えるときはテストで確認する。補助ツールの版は release.yml が Cargo の版を渡す。
 - MCP・別 OS 対応・ARM64 は未実装。追加するときは DESIGN.md を更新する。

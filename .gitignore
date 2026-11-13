@@ -3,3 +3,6 @@
 # エディターの一時ファイル
 *.user
 .vs/
+# .NET（sigilune-manifest）のビルド出力
+/dotnet/**/bin/
+/dotnet/**/obj/

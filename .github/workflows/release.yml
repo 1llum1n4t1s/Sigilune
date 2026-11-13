@@ -1,6 +1,6 @@
 name: Release
 
-# 配布用 zip（sigilune.exe / sigilune_dlib.dll）を作り、Sigilune 自身で Certum のクラウド鍵により署名する。
+# 配布用 zip（sigilune.exe / sigilune_dlib.dll / sigilune-manifest.exe）を作り、Sigilune 自身で Certum のクラウド鍵により署名する。
 # - v* タグの push: 署名済み zip と SHA256 を GitHub Release として公開する。
 # - 手動実行: 署名済み zip を Actions の成果物として残すだけ（公開しない）。
 # 署名用の Secrets は Environment "release"（実行ごとに本人の承認が必要）にだけ置く。
@@ -44,11 +44,25 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Setup .NET
+        # sigilune-manifest.exe（.NET Framework 4.8 向け）のビルドに使う。参照アセンブリは NuGet から取る。
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Test
         run: cargo test --locked
 
       - name: Build
-        run: cargo build --release --locked
+        run: |
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+          dotnet build dotnet/Sigilune.Manifest/Sigilune.Manifest.csproj -c Release -p:Version=${{ steps.version.outputs.version }} -o "$env:RUNNER_TEMP/manifest-tool"
+          if ($LASTEXITCODE -ne 0) { throw 'building sigilune-manifest failed' }
+
+      - name: Test manifest signing
+        # 移植した ClickOnce 署名が mage.exe とバイト単位で一致し、検証・改ざん検出が働くことを確かめる。
+        run: ./tests/Test-ManifestSigning.ps1 -Tool "$env:RUNNER_TEMP/manifest-tool/sigilune-manifest.exe" -WorkDirectory "$env:RUNNER_TEMP/manifest-test"
 
       - name: Stage files
         id: stage
@@ -60,6 +74,9 @@ jobs:
           foreach ($f in 'sigilune.exe', 'sigilune_dlib.dll') {
             Copy-Item "target/release/$f" $tool
             Copy-Item "target/release/$f" $dist
+          }
+          foreach ($f in 'sigilune-manifest.exe', 'sigilune-manifest.exe.config') {
+            Copy-Item (Join-Path $env:RUNNER_TEMP "manifest-tool/$f") $dist
           }
           Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md $dist
           "tool=$tool" >> $env:GITHUB_OUTPUT
@@ -75,7 +92,7 @@ jobs:
           $dist = '${{ steps.stage.outputs.dist }}'
           try {
             # 署名後に有効性・署名者・タイムスタンプを検証し、失敗なら非0で止まる。
-            & $sigilune sign (Join-Path $dist 'sigilune.exe') (Join-Path $dist 'sigilune_dlib.dll')
+            & $sigilune sign (Join-Path $dist 'sigilune.exe') (Join-Path $dist 'sigilune_dlib.dll') (Join-Path $dist 'sigilune-manifest.exe')
             if ($LASTEXITCODE -ne 0) { throw "sigilune sign failed ($LASTEXITCODE)" }
           } finally {
             & $sigilune logout | Out-Null
@@ -98,12 +115,12 @@ jobs:
           $zip = '${{ steps.package.outputs.zip }}'
           $check = Join-Path $env:RUNNER_TEMP 'verify'
           Expand-Archive -LiteralPath $zip -DestinationPath $check
-          $expected = @('LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'sigilune.exe', 'sigilune_dlib.dll')
+          $expected = @('LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'sigilune-manifest.exe', 'sigilune-manifest.exe.config', 'sigilune.exe', 'sigilune_dlib.dll')
           $actual = @(Get-ChildItem -LiteralPath $check -File | ForEach-Object Name | Sort-Object)
           if (Compare-Object $expected $actual) { throw "unexpected package contents: $($actual -join ', ')" }
           $reported = (& (Join-Path $check 'sigilune.exe') --version)
           if ($reported -ne 'sigilune ${{ steps.version.outputs.version }}') { throw "version mismatch: $reported" }
-          & (Join-Path $check 'sigilune.exe') verify (Join-Path $check 'sigilune.exe') (Join-Path $check 'sigilune_dlib.dll') --signer 'Open Source Developer Yuichiro Shinozaki'
+          & (Join-Path $check 'sigilune.exe') verify (Join-Path $check 'sigilune.exe') (Join-Path $check 'sigilune_dlib.dll') (Join-Path $check 'sigilune-manifest.exe') --signer 'Open Source Developer Yuichiro Shinozaki'
           if ($LASTEXITCODE -ne 0) { throw 'signature verification failed' }
           Write-Host "verified $zip  sha256=$((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash)"
 

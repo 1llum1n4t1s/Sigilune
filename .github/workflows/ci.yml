@@ -1,7 +1,8 @@
 name: CI
 
 # クラウド署名は本人の TOTP と端末が必要なため CI では行わない。
-# CI ではテスト用ローカル鍵で signtool /dlib の結合テスト（exe / msi / ps1 / msix）まで確認する。
+# CI ではテスト用ローカル鍵で signtool /dlib の結合テスト（exe / msi / ps1 / msix）と、
+# ClickOnce / VSTO マニフェスト署名の mage.exe との比較テストまで確認する。
 on:
   push:
     branches: [main]
@@ -33,3 +34,12 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build sigilune-manifest
+        run: dotnet build dotnet/Sigilune.Manifest/Sigilune.Manifest.csproj -c Release -o "$env:RUNNER_TEMP/manifest-tool"
+      - name: Test manifest signing
+        # 使い捨ての自己署名鍵で mage.exe と出力を突き合わせる（Certum には接続しない）。
+        run: ./tests/Test-ManifestSigning.ps1 -Tool "$env:RUNNER_TEMP/manifest-tool/sigilune-manifest.exe" -WorkDirectory "$env:RUNNER_TEMP/manifest-test"

@@ -5,9 +5,9 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use sigilune_core::cert::Cert;
+use sigilune_core::cert::{self, Cert};
 use sigilune_core::session::{self, LoginPolicy};
-use sigilune_core::{DEFAULT_TIMESTAMP_URL, credential, signtool, verify};
+use sigilune_core::{DEFAULT_TIMESTAMP_URL, credential, manifest, signtool, verify};
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -42,11 +42,26 @@ enum Command {
     Sign(SignArgs),
     /// Verify Authenticode signatures (signer, timestamp)
     Verify(VerifyArgs),
+    /// Sign ClickOnce / VSTO manifests (.manifest, .application, .vsto), then verify them
+    SignManifest(SignManifestArgs),
+    /// Verify ClickOnce / VSTO manifest signatures with the .NET Framework ClickOnce verifier
+    VerifyManifest(VerifyManifestArgs),
+    /// Sign one SHA-256 digest and print the RSA PKCS#1 v1.5 signature (Base64)
+    SignHash {
+        /// The digest as 64 hex digits or Base64
+        digest: String,
+        /// Do not log in; fail unless a cached session exists
+        #[arg(long)]
+        no_login: bool,
+    },
     /// Show (or export) the signing certificate of the current session
     Cert {
         /// Write the certificate (DER) to this file
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Write the issuing intermediate CA certificate (DER) to this file
+        #[arg(long)]
+        intermediate_out: Option<PathBuf>,
         #[command(flatten)]
         json: JsonFlag,
     },
@@ -84,8 +99,12 @@ struct SignArgs {
     #[arg(long, default_value = DEFAULT_TIMESTAMP_URL)]
     timestamp_url: String,
     /// Replace an existing signature instead of refusing
-    #[arg(long)]
+    #[arg(long, conflicts_with = "skip_signed")]
     replace: bool,
+    /// Leave files that already carry a valid (trusted) signature untouched instead of refusing,
+    /// e.g. third-party DLLs passed in by a packaging tool's sign template
+    #[arg(long)]
+    skip_signed: bool,
     /// Description shown in the UAC prompt (signtool /d)
     #[arg(long)]
     description: Option<String>,
@@ -97,6 +116,43 @@ struct SignArgs {
     no_login: bool,
     #[command(flatten)]
     json: JsonFlag,
+}
+
+#[derive(Args)]
+struct SignManifestArgs {
+    /// Manifests to sign (deployment manifests such as .vsto / .application, or application manifests)
+    files: Vec<PathBuf>,
+    /// Application manifest to sign first; the other manifests' references to it (size, digest,
+    /// publicKeyToken) are refreshed before they are signed
+    #[arg(long)]
+    application: Option<PathBuf>,
+    /// RFC 3161 timestamp server
+    #[arg(long, default_value = DEFAULT_TIMESTAMP_URL)]
+    timestamp_url: String,
+    /// Description recorded in the publisher signature
+    #[arg(long)]
+    description: Option<String>,
+    /// URL recorded in the publisher signature
+    #[arg(long)]
+    description_url: Option<String>,
+    /// Do not log in; fail unless a cached session exists
+    #[arg(long)]
+    no_login: bool,
+}
+
+#[derive(Args)]
+struct VerifyManifestArgs {
+    #[arg(required = true)]
+    files: Vec<PathBuf>,
+    /// Require this signer common name (exact match)
+    #[arg(long)]
+    signer: Option<String>,
+    /// Accept signatures without a timestamp
+    #[arg(long)]
+    allow_no_timestamp: bool,
+    /// Skip certificate revocation checks
+    #[arg(long)]
+    no_revocation: bool,
 }
 
 #[derive(Args)]
@@ -131,8 +187,108 @@ fn run(cli: Cli) -> Result<()> {
         Command::Logout { forget } => logout(forget),
         Command::Sign(a) => sign(a),
         Command::Verify(a) => verify_cmd(a),
-        Command::Cert { out, json } => cert(out, json.json),
+        Command::SignManifest(a) => sign_manifest(a),
+        Command::VerifyManifest(a) => verify_manifest(a),
+        Command::SignHash { digest, no_login } => sign_hash(&digest, no_login),
+        Command::Cert {
+            out,
+            intermediate_out,
+            json,
+        } => cert(out, intermediate_out, json.json),
     }
+}
+
+fn policy(no_login: bool) -> LoginPolicy {
+    if no_login {
+        LoginPolicy::CacheOnly
+    } else {
+        LoginPolicy::AllowLogin
+    }
+}
+
+/// ダイジェスト1件に署名して Base64 で出す。sigilune-manifest.exe からの呼び戻しに使う。
+fn sign_hash(digest: &str, no_login: bool) -> Result<()> {
+    let d = manifest::parse_digest(digest)?;
+    let s = session::acquire(policy(no_login))?;
+    let sig = s.sign_sha256(&d)?;
+    println!("{}", manifest::base64_encode(&sig));
+    Ok(())
+}
+
+fn sign_manifest(a: SignManifestArgs) -> Result<()> {
+    if a.files.is_empty() && a.application.is_none() {
+        bail!("no manifest to sign (pass files and/or --application)");
+    }
+    let mut files = Vec::new();
+    for f in &a.files {
+        let abs = std::path::absolute(f).with_context(|| format!("resolving {}", f.display()))?;
+        if !abs.is_file() {
+            bail!("not a file: {}", abs.display());
+        }
+        files.push(abs);
+    }
+    let application = match &a.application {
+        Some(p) => {
+            let abs = std::path::absolute(p)?;
+            if !abs.is_file() {
+                bail!("not a file: {}", abs.display());
+            }
+            Some(abs)
+        }
+        None => None,
+    };
+    let tool = manifest::find_tool()?;
+    let me = std::env::current_exe().context("locating sigilune.exe")?;
+
+    // 先にセッションを確立し、署名者と中間証明書を確定させる。
+    // 補助ツールが `sign-hash --no-login` で呼び戻すため、セッションのロックは補助ツールの起動前に手放す。
+    let work = manifest::WorkDir::create()?;
+    let (expected, intermediates) = {
+        let s = session::acquire(policy(a.no_login))?;
+        let c = Cert::from_der(s.certificate_der())?;
+        std::fs::write(work.path().join("signer.der"), c.der())?;
+        let mut intermediates = Vec::new();
+        if let Some(i) = cert::intermediate_for(&c) {
+            let p = work.path().join("intermediate.der");
+            std::fs::write(&p, i.der())?;
+            intermediates.push(p);
+        }
+        (c.common_name(), intermediates)
+    };
+
+    manifest::sign(
+        &manifest::SignManifestOptions {
+            tool: &tool,
+            sigilune: &me,
+            certificate: &work.path().join("signer.der"),
+            intermediates: &intermediates,
+            timestamp_url: Some(&a.timestamp_url),
+            description: a.description.as_deref(),
+            description_url: a.description_url.as_deref(),
+            application: application.as_deref(),
+        },
+        &files,
+    )?;
+
+    // 署名後に ClickOnce の検証で署名者・タイムスタンプを確かめる。
+    let mut all: Vec<PathBuf> = application.into_iter().collect();
+    all.extend(files);
+    manifest::verify(&tool, &all, Some(&expected), false, false)
+}
+
+fn verify_manifest(a: VerifyManifestArgs) -> Result<()> {
+    let files: Vec<PathBuf> = a
+        .files
+        .iter()
+        .map(std::path::absolute)
+        .collect::<std::io::Result<_>>()?;
+    manifest::verify(
+        &manifest::find_tool()?,
+        &files,
+        a.signer.as_deref(),
+        a.allow_no_timestamp,
+        a.no_revocation,
+    )
 }
 
 fn setup(a: SetupArgs) -> Result<()> {
@@ -293,8 +449,28 @@ fn logout(forget: bool) -> Result<()> {
 }
 
 /// 署名対象の確認。存在・重複・既存署名を確かめ、絶対パスへ揃える。
-fn prepare_targets(files: &[PathBuf], replace: bool) -> Result<Vec<PathBuf>> {
+/// 署名済みファイルの扱い。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExistingSignature {
+    /// 署名済みなら拒否する（既定）。
+    Refuse,
+    /// 上書きする（`--replace`）。
+    Replace,
+    /// 有効（信頼済み）な署名ならそのまま残して対象から外す（`--skip-signed`）。
+    /// 無効・不信頼の署名は見逃さず拒否する。
+    SkipValid,
+}
+
+/// 有効な署名があるため飛ばした対象と、その検証結果。
+type SkippedTargets = Vec<(PathBuf, verify::SignatureReport)>;
+
+/// 署名する対象と、有効な署名があるため飛ばした対象を返す。
+fn prepare_targets(
+    files: &[PathBuf],
+    existing: ExistingSignature,
+) -> Result<(Vec<PathBuf>, SkippedTargets)> {
     let mut out: Vec<PathBuf> = Vec::new();
+    let mut skipped = Vec::new();
     for f in files {
         let abs = std::path::absolute(f).with_context(|| format!("resolving {}", f.display()))?;
         if !abs.is_file() {
@@ -311,20 +487,51 @@ fn prepare_targets(files: &[PathBuf], replace: bool) -> Result<Vec<PathBuf>> {
             bail!("signtool cannot sign this format: {}", abs.display());
         }
         // 既定では未署名のファイルだけを受け付け、意図しない二重署名・上書きを防ぐ。
-        if r.signed && !replace {
-            bail!(
-                "already signed ({}): {} (use --replace to overwrite)",
-                r.status_text(),
-                abs.display()
-            );
+        if r.signed {
+            match existing {
+                ExistingSignature::Replace => {}
+                ExistingSignature::SkipValid if r.valid => {
+                    skipped.push((abs, r));
+                    continue;
+                }
+                _ => bail!(
+                    "already signed ({}): {} (use --replace to overwrite)",
+                    r.status_text(),
+                    abs.display()
+                ),
+            }
         }
         out.push(abs);
     }
-    Ok(out)
+    Ok((out, skipped))
 }
 
 fn sign(a: SignArgs) -> Result<()> {
-    let files = prepare_targets(&a.files, a.replace)?;
+    let existing = if a.replace {
+        ExistingSignature::Replace
+    } else if a.skip_signed {
+        ExistingSignature::SkipValid
+    } else {
+        ExistingSignature::Refuse
+    };
+    let (files, skipped) = prepare_targets(&a.files, existing)?;
+    if !a.json.json {
+        for (f, r) in &skipped {
+            println!(
+                "Skipped (already signed, {}, signer: {}): {}",
+                r.status_text(),
+                r.signer.as_deref().unwrap_or("-"),
+                display(f)
+            );
+        }
+    }
+    // すべて飛ばした場合はログインもしない。
+    if files.is_empty() {
+        if a.json.json {
+            println!("[]");
+        }
+        return Ok(());
+    }
     let tool = signtool::find_signtool()?;
     let dlib = signtool::find_dlib()?;
     // 先にセッションを確立し、署名者を確定させる（dlib はこのキャッシュを使う）。
@@ -431,11 +638,16 @@ fn display(p: &Path) -> String {
     p.display().to_string()
 }
 
-fn cert(out: Option<PathBuf>, json: bool) -> Result<()> {
+fn cert(out: Option<PathBuf>, intermediate_out: Option<PathBuf>, json: bool) -> Result<()> {
     let s = session::acquire(LoginPolicy::AllowLogin)?;
     let c = Cert::from_der(s.certificate_der())?;
     if let Some(path) = &out {
         std::fs::write(path, c.der()).with_context(|| format!("writing {}", path.display()))?;
+    }
+    if let Some(path) = &intermediate_out {
+        let i = cert::intermediate_for(&c)
+            .context("no bundled intermediate CA issued this certificate")?;
+        std::fs::write(path, i.der()).with_context(|| format!("writing {}", path.display()))?;
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&cert_json(&c))?);

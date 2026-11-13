@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Install Sigilune (sigilune.exe + sigilune_dlib.dll) from GitHub Releases.
+Install Sigilune (sigilune.exe + sigilune_dlib.dll + sigilune-manifest.exe) from GitHub Releases.
 
 .DESCRIPTION
-Downloads the release zip, checks its SHA-256 against the published checksum, checks that both
-binaries carry a valid Authenticode signature from the Sigilune publisher, then installs them and
+Downloads the release zip, checks its SHA-256 against the published checksum, checks that every
+binary carries a valid Authenticode signature from the Sigilune publisher, then installs them and
 adds the folder to the user PATH.
 
   irm https://raw.githubusercontent.com/1llum1n4t1s/Sigilune/main/install.ps1 | iex
@@ -39,6 +39,9 @@ param(
 $Repository = '1llum1n4t1s/Sigilune'
 $ExpectedSigner = 'Open Source Developer Yuichiro Shinozaki'
 $Binaries = @('sigilune.exe', 'sigilune_dlib.dll')
+# 1.1.0 で追加した ClickOnce / VSTO マニフェスト署名の補助ツール。古い版の zip には無いので、あるときだけ検証して入れる。
+$OptionalBinaries = @('sigilune-manifest.exe')
+$OptionalFiles = @('sigilune-manifest.exe.config')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -81,7 +84,8 @@ try {
 
     $extract = Join-Path $work 'extract'
     Expand-Archive -LiteralPath $zip -DestinationPath $extract
-    foreach ($name in $Binaries) {
+    $present = @($OptionalBinaries | Where-Object { Test-Path -LiteralPath (Join-Path $extract $_) -PathType Leaf })
+    foreach ($name in @($Binaries + $present)) {
         $file = Join-Path $extract $name
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "The package does not contain $name." }
         $sig = Get-AuthenticodeSignature -LiteralPath $file
@@ -91,7 +95,7 @@ try {
     Write-Step "Signature OK ($ExpectedSigner)"
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    foreach ($name in @($Binaries + @('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'))) {
+    foreach ($name in @($Binaries + $present + $OptionalFiles + @('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'))) {
         $src = Join-Path $extract $name
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination $InstallDir -Force }
     }

@@ -26,7 +26,7 @@ inputs:
 
 outputs:
   path:
-    description: Folder that contains sigilune.exe and sigilune_dlib.dll
+    description: Folder that contains sigilune.exe, sigilune_dlib.dll and sigilune-manifest.exe
     value: ${{ steps.install.outputs.path }}
   version:
     description: Installed Sigilune version

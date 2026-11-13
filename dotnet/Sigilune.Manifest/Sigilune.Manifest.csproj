@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    sigilune-manifest.exe: ClickOnce / VSTO マニフェスト（.manifest / .application / .vsto）へ
+    Certum のクラウド鍵で XML 署名する補助ツール。sigilune.exe（Rust）から呼ばれる。
+
+    .NET Framework 4.8 を対象にする理由:
+      - 署名処理は MSBuild の mansign2.cs（MIT）を移植しており、公開鍵トークン・発行者鍵ハッシュ・
+        旧式タイムスタンプの計算に .NET Framework の clr.dll の内部関数を使う（.NET では使えない）。
+      - 検証には ClickOnce / VSTO 実行時と同じ System.Deployment の検証処理を使う。
+      - Windows 10 / 11 には .NET Framework 4.8 が標準で入っているため、利用者に追加の導入が要らない。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>sigilune-manifest</AssemblyName>
+    <RootNamespace>Sigilune.Manifest</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Product>Sigilune</Product>
+    <Company>Kagayoi</Company>
+    <Copyright>Copyright (c) Kagayoi. MIT License.</Copyright>
+    <!-- 版は release.yml が Cargo のワークスペース版を -p:Version で渡す（ここでは固定しない）。 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SDK だけで net48 をビルドできるよう参照アセンブリを NuGet から取る（CI に Targeting Pack が無くてもよい）。 -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Security" />
+    <Reference Include="System.Deployment" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+
+</Project>

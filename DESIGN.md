@@ -6,7 +6,8 @@ Sigilune の現在の設計・境界・データの流れ・不変条件をま�
 
 - Certum SimplySign のクラウドにあるコード署名用の鍵で、signtool が扱えるすべての形式に Authenticode 署名する。
 - SimplySign Desktop と手入力のワンタイムコードを不要にし、ビルドスクリプトや Velopack などから1コマンドで呼べるようにする。
-- 対象は Windows x64。クラウド署名は本人の TOTP と端末が必要なため、CI では行わない。
+- signtool では署名できない ClickOnce / VSTO マニフェストにも、同じクラウド鍵で XML 署名する。
+- 対象は Windows x64。本人の PC のほか、承認つき Environment の Secrets で GitHub Actions からも署名できる（Sigilune 自身の CI はテスト鍵だけを使う）。
 
 ## 構成
 
@@ -16,17 +17,33 @@ Sigilune の現在の設計・境界・データの流れ・不変条件をま�
 | `sigilune` | bin (`sigilune.exe`) | CLI：`setup` / `login` / `status` / `logout` / `sign` / `verify` / `cert` |
 | `sigilune-dlib` | cdylib (`sigilune_dlib.dll`) | signtool `/dlib` 用：`AuthenticodeDigestSignEx` と `…WithFileHandle` |
 
+| `dotnet/Sigilune.Manifest` | .NET Framework 4.8 exe (`sigilune-manifest.exe`) | ClickOnce / VSTO マニフェストの XML 署名・参照更新・検証。`sigilune sign-manifest` / `verify-manifest` から起動される |
+
 クラウドとの HTTPS 通信は `ssign-core`（MIT, Le-Syl21/ssign）の公開関数 `auth::login` / `card::fetch` / `sign::request` / `client::client` を使う。`ssign-core` 自身の平文トークンキャッシュ（`CloudSession`）は使わない。
 
 ## 署名の流れ
 
-1. `sigilune sign` が対象を確認する（存在・重複・`WinVerifyTrust` で未署名か。署名済みは `--replace` がなければ拒否。入れ子署名（`/as`）は検証が先頭の署名しか見ないため未提供）。
+1. `sigilune sign` が対象を確認する（存在・重複・`WinVerifyTrust` で未署名か。署名済みは `--replace`（上書き）か `--skip-signed`（有効な署名なら対象から外す。無効な署名は拒否）がなければ拒否。入れ子署名（`/as`）は検証が先頭の署名しか見ないため未提供）。
 2. `session::acquire` でセッションを得る（下記）。署名者の CN をここで確定する。
 3. `signtool sign /fd SHA256 /td SHA256 /tr <TSA> /dlib sigilune_dlib.dll <files>` を1回で実行する。
 4. signtool（SignerSignEx3）が形式ごとに署名データを組み立て、認証属性のダイジェスト（SHA-256, 32バイト）を dlib へ渡す。
 5. dlib が同じセッションを取得してクラウドに署名させ、RSA PKCS#1 v1.5 署名（big-endian）・署名者証明書・中間証明書を返す。
 6. signtool が RFC 3161 タイムスタンプを付けて埋め込む。
 7. `sigilune sign` が全ファイルを `WinVerifyTrust` で検証する（有効・署名者 CN 一致・タイムスタンプあり）。
+
+## マニフェスト署名の流れ（ClickOnce / VSTO）
+
+signtool はマニフェストの XML 署名を作れないため、MSBuild の `mansign2.cs`（MIT）を移植した補助ツールで署名する。
+
+1. `sigilune sign-manifest` がセッションを得て、署名者証明書と発行元の中間証明書（同梱 DER から発行者一致で選ぶ）を一時フォルダーへ書き出す。補助ツールが同じセッションを使えるよう、起動前にミューテックスを手放す。
+2. `sigilune-manifest.exe sign --sigilune <sigilune.exe> --cert ... --intermediate ... [--application <app>] <files>` を起動する。
+3. 補助ツールは公開鍵だけを持つ `DelegatingRsa` を使い、mansign2 と同じ順序（既存署名の除去 → publicKeyToken 置換 → publisherIdentity 挿入 → Authenticode ライセンス署名 + RFC 3161 タイムスタンプ → 強名署名）で XML を組み立てる。RSA 署名が必要になるたびに `sigilune sign-hash --no-login <hex>` を呼び、返った署名を公開鍵で検証してから使う。
+4. `--application` があれば先にアプリケーション マニフェストへ署名し、配置マニフェスト内の参照（size・DigestValue・publicKeyToken）を更新してから配置マニフェストへ署名する。
+5. `verify` で検証する。System.Deployment の `SignedCmiManifest2.Verify` は成功時も TRUST_E_FAIL を残し、タイムスタンプ時刻を返さず、信頼された発行元ストアへの登録を前提にするため、同じ内部処理（強名署名・ライセンス署名・証明書・失効・タイムスタンプ・publisherIdentity）をリフレクションで個別に呼ぶ。信頼された発行元ストアへの登録は情報として表示するだけで合否に含めない。
+
+- 公開鍵トークン・発行者鍵ハッシュは .NET Framework の `clr.dll` 内部関数でしか計算できないため、補助ツールは net48 を対象にする（Windows 10 1903 以降は標準搭載）。
+- 署名アルゴリズムは rsa-sha256 だけ。タイムスタンプなしの署名は `--no-timestamp`（テスト用、CLI からは使わない）。
+- 改行・空白は入力を保つ（`XmlTextReader` + `PreserveWhitespace`）。テスト鍵では `mage.exe -Sign` の出力とバイト単位で一致する（`tests/Test-ManifestSigning.ps1`、CI で実行）。
 
 ## セッションと秘密情報
 
@@ -54,10 +71,12 @@ Sigilune の現在の設計・境界・データの流れ・不変条件をま�
 - セッション破棄後に3プロセスを並列起動し、ログインが1回だけで全件成功することを確認。
 - クラウドへ直接ログインしても、同じ PC の SimplySign Desktop の接続（鍵の利用）は維持された。
 - 本番署名した exe と msix の署名データに、署名者と「Certum Code Signing 2021 CA」が埋め込まれていることを確認（チェーンを利用者側のストアに頼らない）。
+- 本番証明書で VSTO アドインの `.dll.manifest` と `.vsto` に `sign-manifest` で署名し、publicKeyToken・issuerKeyHash がローカル証明書ストアでの署名（`mage` / MSBuild）と同一、Certum のタイムスタンプ付き、改ざんで検証失敗となることを確認。
 - 未確認：Velopack `--signTemplate` 経由、`.cab` / `.cat` / `.dll` / `.appx`、signtool を直接呼んだ場合の dlib 内ログイン。
 
 ## 採用しなかった案
 
 - **SimplySign Desktop の画面へ TOTP を自動入力する方式**：Windows 限定で UI の言語・版に弱く、配布に向かない。
 - **PE などの署名データを自前で組み立てる方式（ssign 本体）**：MSIX などに対応できない。signtool に任せる `/dlib` 方式なら全形式に対応できる。
+- **マニフェスト署名を Rust で自前実装する案**：publicKeyToken・issuerKeyHash・Authenticode ライセンスの計算を .NET Framework の内部実装と完全に一致させる必要があり、MSBuild の実装を移植した方が確実で、`mage.exe` との一致も検証できる。
 - **MCP サーバーを本体にする案**：ビルドスクリプトから呼べず、任意ファイルへの署名窓口になるため。必要になれば CLI の上に状態確認だけの薄い層として追加する。

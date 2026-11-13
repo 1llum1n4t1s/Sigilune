@@ -46,7 +46,7 @@ sigilune sign ──► signtool sign /fd SHA256 /tr http://time.certum.pl /td S
 irm https://raw.githubusercontent.com/1llum1n4t1s/Sigilune/main/install.ps1 | iex
 ```
 
-The installer downloads the latest release, checks its SHA-256 and the Authenticode signature of both binaries, installs them to `%LOCALAPPDATA%\Programs\Sigilune` and adds that folder to your user `PATH`. Options: `-Version 1.0.0`, `-InstallDir <dir>`, `-NoPath`. To pass options, download the script first: `irm .../install.ps1 -OutFile install.ps1; .\install.ps1 -Version 1.0.0`.
+The installer downloads the latest release, checks its SHA-256 and the Authenticode signature of every binary, installs them to `%LOCALAPPDATA%\Programs\Sigilune` and adds that folder to your user `PATH`. Options: `-Version 1.0.0`, `-InstallDir <dir>`, `-NoPath`. To pass options, download the script first: `irm .../install.ps1 -OutFile install.ps1; .\install.ps1 -Version 1.0.0`.
 
 **2. Register your account** (once per PC). You are asked for the `otpauth://` URI without echo:
 
@@ -63,8 +63,8 @@ sigilune sign .\MyApp.exe
 
 ### Other ways to install
 
-- **Manual**: download `sigilune-<version>-win-x64.zip` from [Releases](https://github.com/1llum1n4t1s/Sigilune/releases), check it against the `.sha256` file, and keep `sigilune.exe` and `sigilune_dlib.dll` together in one folder.
-- **From source**: `cargo build --release` → `target\release\sigilune.exe` and `target\release\sigilune_dlib.dll`.
+- **Manual**: download `sigilune-<version>-win-x64.zip` from [Releases](https://github.com/1llum1n4t1s/Sigilune/releases), check it against the `.sha256` file, and keep all files of the zip together in one folder.
+- **From source**: `cargo build --release` → `target\release\sigilune.exe` and `target\release\sigilune_dlib.dll`; `dotnet build dotnet/Sigilune.Manifest -c Release` → `sigilune-manifest.exe` (+ `.config`), only needed for ClickOnce / VSTO manifests.
 
 ## GitHub Actions
 
@@ -108,9 +108,12 @@ Which binary the action installs:
 | `sigilune setup --email <e-mail>` | Store the registration. The `otpauth://` URI (or Base32 seed) is read from a hidden prompt, or from stdin when piped. `--from-json <file> --email-pointer <ptr> --uri-pointer <ptr>` imports from a JSON secrets file. |
 | `sigilune login` | Log in now (reuses a valid cached session). |
 | `sigilune status` | Show the registration and cached session without contacting Certum. |
-| `sigilune sign <files…>` | Sign with signtool + the dlib, then verify. Refuses already-signed files unless `--replace` (overwrite). Nested signatures are not supported yet. Also `--timestamp-url`, `--description`, `--description-url`, `--no-login`, `--json`. |
+| `sigilune sign <files…>` | Sign with signtool + the dlib, then verify. Refuses already-signed files unless `--replace` (overwrite) or `--skip-signed` (leave files with a valid, trusted signature untouched; invalid signatures are still refused). Nested signatures are not supported yet. Also `--timestamp-url`, `--description`, `--description-url`, `--no-login`, `--json`. |
 | `sigilune verify <files…>` | Verify validity and timestamp; `--signer <CN>` requires a signer; `--allow-no-timestamp`; `--json`. |
-| `sigilune cert [--out cert.cer]` | Show or export the signing certificate. |
+| `sigilune sign-manifest <manifests…>` | Sign ClickOnce / VSTO manifests (`.manifest`, `.application`, `.vsto`), then verify them. `--application <app.manifest>` signs the application manifest first and refreshes the deployment manifests' reference to it (size, digest, publicKeyToken). Also `--timestamp-url`, `--description`, `--description-url`, `--no-login`. See [ClickOnce / VSTO manifests](#clickonce--vsto-manifests). |
+| `sigilune verify-manifest <manifests…>` | Verify manifest signatures with the .NET Framework ClickOnce verifier; `--signer <CN>`, `--allow-no-timestamp`, `--no-revocation`. |
+| `sigilune sign-hash <digest>` | Sign one SHA-256 digest (64 hex digits or Base64) and print the RSA PKCS#1 v1.5 signature as Base64. Low-level building block for other signing tools. |
+| `sigilune cert [--out cert.cer] [--intermediate-out ca.cer]` | Show or export the signing certificate (and its issuing intermediate CA). |
 | `sigilune logout [--forget]` | Delete the cached session; `--forget` also deletes the stored registration. |
 
 ## Using it from build tools
@@ -118,10 +121,10 @@ Which binary the action installs:
 **Velopack**
 
 ```powershell
-vpk pack ... --signTemplate "sigilune sign {{file}}"
+vpk pack ... --signTemplate "sigilune sign --skip-signed {{file}}"
 ```
 
-Each invocation is a separate process; they share one login. If your package contains files that are already signed and you want them re-signed, add `--replace`.
+Each invocation is a separate process; they share one login. vpk may pass files that are already signed (for example Microsoft DLLs in a subfolder); `--skip-signed` leaves those untouched. To re-sign them with your certificate instead, use `--replace`.
 
 **Plain signtool** (other tools that can call signtool): log in first, then point signtool at the dlib.
 
@@ -134,6 +137,22 @@ The dlib uses the cached session, or logs in with the stored registration if the
 
 **Scripts / CI on your own machine**: `sigilune sign` exits non-zero on any signing or verification failure; add `--json` for machine-readable results.
 
+## ClickOnce / VSTO manifests
+
+ClickOnce and VSTO add-ins carry XML signatures in their manifests in addition to the Authenticode signatures on the binaries. `signtool` cannot produce those, so Sigilune ships `sigilune-manifest.exe`, a port of MSBuild's manifest signer (`mansign2.cs`), which asks `sigilune` to sign each digest in the cloud.
+
+```powershell
+# 1. Authenticode-sign the binaries first (the manifests record their digests)
+sigilune sign .\publish\MyAddIn.dll .\publish\setup.exe
+# 2. Refresh the application manifest's file hashes if a binary changed (e.g. with mage -Update), then:
+sigilune sign-manifest --application ".\publish\Application Files\MyAddIn_1_0_0_0\MyAddIn.dll.manifest" .\publish\MyAddIn.vsto
+```
+
+- The output matches `mage.exe -Sign` byte for byte (checked in CI), plus an RFC 3161 timestamp from Certum and the intermediate CA in the signature.
+- After signing, each manifest is checked with the same .NET Framework verifier ClickOnce / VSTO use at install time: XML signature, publisher identity, certificate chain and timestamp.
+- Requires .NET Framework 4.8 (built into Windows 10 1903+ / 11) and `sigilune-manifest.exe` next to `sigilune.exe` (set `SIGILUNE_MANIFEST_TOOL` to use another path).
+- Whether end users are prompted on install still depends on their Trusted Publishers store, exactly as with a locally signed manifest; `verify-manifest` reports it but does not require it.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -143,6 +162,7 @@ The dlib uses the cached session, or logs in with the stored registration if the
 | `SIGILUNE_DLIB` | Path to `sigilune_dlib.dll` (default: next to `sigilune.exe`). |
 | `SIGILUNE_CREDENTIAL` | Credential Manager entry name (default `Sigilune/Certum SimplySign`); use different names for several accounts. |
 | `SIGILUNE_HOME` | Absolute folder for the session cache (default `%LOCALAPPDATA%\Sigilune`). |
+| `SIGILUNE_MANIFEST_TOOL` | Path to `sigilune-manifest.exe` (default: next to `sigilune.exe`). |
 
 ## Caveats
 
