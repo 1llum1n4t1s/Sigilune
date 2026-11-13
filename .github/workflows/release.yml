@@ -6,7 +6,8 @@ name: Release
 # 署名用の Secrets は Environment "release"（実行ごとに本人の承認が必要）にだけ置く。
 on:
   push:
-    tags: ['v*']
+    # v1.2.3 形式だけ。メジャー版タグ（v1）の付け替えでは起動しない。
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
 
 permissions:
