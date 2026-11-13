@@ -17,14 +17,33 @@ const FIXTURES: &str = concat!(
     "/../sigilune-core/tests/fixtures"
 );
 
+/// テスト対象の cdylib を返す。
+///
+/// `cargo test` は結合テストからリンクできない cdylib をビルドしないため、同じビルド先・同じ
+/// プロファイルで `cargo build -p sigilune-dlib` を実行してから使う（ビルド済みなら即終了する）。
+/// 並列実行される各テストからの呼出しは Cargo のビルドロックで直列化される。
 fn dlib_path() -> PathBuf {
-    // tests の実行ファイルは target/<profile>/deps にあり、cdylib は target/<profile> に出力される。
-    let exe = std::env::current_exe().unwrap();
-    exe.parent()
+    // tests の実行ファイルは <target>/<profile>/deps にある。
+    let deps = std::env::current_exe()
         .unwrap()
         .parent()
         .unwrap()
-        .join("sigilune_dlib.dll")
+        .to_path_buf();
+    let profile_dir = deps.parent().unwrap();
+    let target_dir = profile_dir.parent().unwrap();
+    let mut cmd = std::process::Command::new(env!("CARGO"));
+    cmd.args(["build", "--quiet", "-p", "sigilune-dlib", "--target-dir"])
+        .arg(target_dir);
+    if profile_dir.file_name().is_some_and(|n| n == "release") {
+        cmd.arg("--release");
+    }
+    let status = cmd
+        .status()
+        .expect("starting cargo build for sigilune-dlib");
+    assert!(status.success(), "cargo build -p sigilune-dlib failed");
+    let dll = profile_dir.join("sigilune_dlib.dll");
+    assert!(dll.is_file(), "missing {}", dll.display());
+    dll
 }
 
 fn work_dir(name: &str) -> PathBuf {
@@ -54,7 +73,6 @@ fn sign_and_check(dir: &Path, files: &[PathBuf]) {
         return;
     };
     let dlib = dlib_path();
-    assert!(dlib.is_file(), "missing {}", dlib.display());
     let meta = metadata(dir);
     sign(
         &SignOptions {
