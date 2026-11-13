@@ -141,7 +141,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $major = 'v' + ('${{ steps.version.outputs.version }}' -split '\.')[0]
-          gh api "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$major" --silent 2>$null
+          # 単数形 git/ref は完全一致だけを返す（複数形 git/refs は v1.0.0 などの前方一致を配列で返してしまう）。
+          gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$major" --silent 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$major" -f sha=$env:GITHUB_SHA -F force=true --silent
           } else {
