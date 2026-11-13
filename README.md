@@ -38,16 +38,68 @@ sigilune sign ──► signtool sign /fd SHA256 /tr http://time.certum.pl /td S
 - Windows SDK (`signtool.exe`). Set `SIGILUNE_SIGNTOOL` to use a specific one.
 - A Certum SimplySign cloud code-signing certificate, and its **TOTP seed** (`otpauth://` URI). The seed is in the QR code shown when you register the SimplySign mobile token. Keep it as secret as a private key: anyone with the seed and your e-mail can sign as you.
 
-## Install
+## Quick start
 
-Once releases are published: download `sigilune-<version>-win-x64.zip` from Releases and put `sigilune.exe` and `sigilune_dlib.dll` in the same folder on your `PATH`.
-
-From source:
+**1. Install** (PowerShell, no admin rights needed):
 
 ```powershell
-cargo build --release
-# target\release\sigilune.exe and target\release\sigilune_dlib.dll
+irm https://raw.githubusercontent.com/1llum1n4t1s/Sigilune/main/install.ps1 | iex
 ```
+
+The installer downloads the latest release, checks its SHA-256 and the Authenticode signature of both binaries, installs them to `%LOCALAPPDATA%\Programs\Sigilune` and adds that folder to your user `PATH`. Options: `-Version 1.0.0`, `-InstallDir <dir>`, `-NoPath`. To pass options, download the script first: `irm .../install.ps1 -OutFile install.ps1; .\install.ps1 -Version 1.0.0`.
+
+**2. Register your account** (once per PC). You are asked for the `otpauth://` URI without echo:
+
+```powershell
+sigilune setup --email you@example.com
+sigilune login
+```
+
+**3. Sign**:
+
+```powershell
+sigilune sign .\MyApp.exe
+```
+
+### Other ways to install
+
+- **Manual**: download `sigilune-<version>-win-x64.zip` from [Releases](https://github.com/1llum1n4t1s/Sigilune/releases), check it against the `.sha256` file, and keep `sigilune.exe` and `sigilune_dlib.dll` together in one folder.
+- **From source**: `cargo build --release` → `target\release\sigilune.exe` and `target\release\sigilune_dlib.dll`.
+
+## GitHub Actions
+
+Use the bundled action on a Windows runner. Put the two secrets in an **Environment that requires your approval** (Settings → Environments → required reviewers) and reference it from the signing job:
+
+```yaml
+jobs:
+  release:
+    runs-on: windows-latest
+    environment: release          # holds SIGILUNE_EMAIL and SIGILUNE_TOTP_URI
+    steps:
+      - uses: actions/checkout@v7
+      # ... build ...
+      - uses: 1llum1n4t1s/Sigilune@v1
+      - run: sigilune sign dist\MyApp.exe dist\MyApp.msix
+        env:
+          SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
+          SIGILUNE_TOTP_URI: ${{ secrets.SIGILUNE_TOTP_URI }}
+```
+
+Sign everything in **one job**. Parallel jobs on different machines would send the same 30-second TOTP code, and Certum rejects the second one. Never expose the secrets to `pull_request` workflows from forks.
+
+Which binary the action installs:
+
+| `uses:` | Installs |
+| --- | --- |
+| `1llum1n4t1s/Sigilune@v1` | The latest 1.x release (the `v1` tag moves with every 1.x release) |
+| `1llum1n4t1s/Sigilune@v1.0.0` | Exactly 1.0.0 (pin this, or a commit SHA, for reproducible builds; Dependabot can bump it) |
+| `with: version: 1.2.3` | That release, whatever the action ref |
+
+## Updating
+
+- **Your PC**: run the install command again. It replaces the binaries in place and keeps your registration (Credential Manager) and settings. `sigilune --version` shows the installed version.
+- **GitHub Actions**: with `@v1` you get new 1.x releases automatically on the next run; with a pinned `@v1.x.y`, bump the ref (Dependabot's `github-actions` updater does this for you).
+- Breaking changes only come with a new major version (`v2`), so `@v1` never jumps to it.
 
 ## Commands
 

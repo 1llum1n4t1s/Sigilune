@@ -1,0 +1,151 @@
+name: Release
+
+# 配布用 zip（sigilune.exe / sigilune_dlib.dll）を作り、Sigilune 自身で Certum のクラウド鍵により署名する。
+# - v* タグの push: 署名済み zip と SHA256 を GitHub Release として公開する。
+# - 手動実行: 署名済み zip を Actions の成果物として残すだけ（公開しない）。
+# 署名用の Secrets は Environment "release"（実行ごとに本人の承認が必要）にだけ置く。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    environment: release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve version
+        id: version
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'sigilune' | Select-Object -ExpandProperty version
+          if (-not $version) { throw 'could not read the sigilune version' }
+          # タグ公開ではタグとクレートの版が一致しなければ止める。
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match version v$version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Stage files
+        id: stage
+        run: |
+          # 実行中の exe は署名で書き換えられないため、署名に使う道具と配布物を別フォルダーへ分ける。
+          $tool = Join-Path $env:RUNNER_TEMP 'sigilune-tool'
+          $dist = Join-Path $env:RUNNER_TEMP 'sigilune'
+          New-Item -ItemType Directory -Path $tool, $dist -Force | Out-Null
+          foreach ($f in 'sigilune.exe', 'sigilune_dlib.dll') {
+            Copy-Item "target/release/$f" $tool
+            Copy-Item "target/release/$f" $dist
+          }
+          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md $dist
+          "tool=$tool" >> $env:GITHUB_OUTPUT
+          "dist=$dist" >> $env:GITHUB_OUTPUT
+
+      - name: Sign with Sigilune
+        env:
+          SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
+          SIGILUNE_TOTP_URI: ${{ secrets.SIGILUNE_TOTP_URI }}
+          SIGILUNE_HOME: ${{ runner.temp }}\sigilune-home
+        run: |
+          $sigilune = Join-Path '${{ steps.stage.outputs.tool }}' 'sigilune.exe'
+          $dist = '${{ steps.stage.outputs.dist }}'
+          try {
+            # 署名後に有効性・署名者・タイムスタンプを検証し、失敗なら非0で止まる。
+            & $sigilune sign (Join-Path $dist 'sigilune.exe') (Join-Path $dist 'sigilune_dlib.dll')
+            if ($LASTEXITCODE -ne 0) { throw "sigilune sign failed ($LASTEXITCODE)" }
+          } finally {
+            & $sigilune logout | Out-Null
+          }
+
+      - name: Package
+        id: package
+        run: |
+          $name = "sigilune-${{ steps.version.outputs.version }}-win-x64.zip"
+          $zip = Join-Path $env:RUNNER_TEMP $name
+          Compress-Archive -Path (Join-Path '${{ steps.stage.outputs.dist }}' '*') -DestinationPath $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii -NoNewline
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+
+      - name: Verify package
+        # 公開する zip そのものを展開し、版・同梱ファイル・署名（有効・署名者・タイムスタンプ）を照合する。
+        # ここで失敗すれば成果物の保存も GitHub Release の作成も行わない。
+        run: |
+          $zip = '${{ steps.package.outputs.zip }}'
+          $check = Join-Path $env:RUNNER_TEMP 'verify'
+          Expand-Archive -LiteralPath $zip -DestinationPath $check
+          $expected = @('LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'sigilune.exe', 'sigilune_dlib.dll')
+          $actual = @(Get-ChildItem -LiteralPath $check -File | ForEach-Object Name | Sort-Object)
+          if (Compare-Object $expected $actual) { throw "unexpected package contents: $($actual -join ', ')" }
+          $reported = (& (Join-Path $check 'sigilune.exe') --version)
+          if ($reported -ne 'sigilune ${{ steps.version.outputs.version }}') { throw "version mismatch: $reported" }
+          & (Join-Path $check 'sigilune.exe') verify (Join-Path $check 'sigilune.exe') (Join-Path $check 'sigilune_dlib.dll') --signer 'Open Source Developer Yuichiro Shinozaki'
+          if ($LASTEXITCODE -ne 0) { throw 'signature verification failed' }
+          Write-Host "verified $zip  sha256=$((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sigilune-${{ steps.version.outputs.version }}-win-x64
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.zip }}.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = '${{ steps.package.outputs.zip }}'
+          $version = '${{ steps.version.outputs.version }}'
+          # リリースノートは CHANGELOG.md の該当版の節を正本として使う。
+          $lines = Get-Content -LiteralPath CHANGELOG.md -Encoding utf8
+          $start = [Array]::FindIndex($lines, [Predicate[string]] { param($l) $l -match "^## $([regex]::Escape($version))( |$)" })
+          if ($start -lt 0) { throw "CHANGELOG.md has no section for $version" }
+          $end = [Array]::FindIndex($lines, $start + 1, [Predicate[string]] { param($l) $l -match '^## ' })
+          if ($end -lt 0) { $end = $lines.Count }
+          $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          ($lines[($start + 1)..($end - 1)] -join "`n").Trim() | Set-Content -LiteralPath $notes -Encoding utf8
+          gh release create $env:GITHUB_REF_NAME $zip "$zip.sha256" --repo $env:GITHUB_REPOSITORY --title "Sigilune $env:GITHUB_REF_NAME" --notes-file $notes
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
+
+      - name: Move major tag
+        if: github.ref_type == 'tag'
+        # `uses: 1llum1n4t1s/Sigilune@v1` の利用者が新しい 1.x を自動で使えるよう、メジャー版タグを今回のコミットへ動かす。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $major = 'v' + ('${{ steps.version.outputs.version }}' -split '\.')[0]
+          gh api "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$major" --silent 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$major" -f sha=$env:GITHUB_SHA -F force=true --silent
+          } else {
+            gh api -X POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$major" -f sha=$env:GITHUB_SHA --silent
+          }
+          if ($LASTEXITCODE -ne 0) { throw "failed to move $major" }
+          Write-Host "$major -> $env:GITHUB_SHA"
