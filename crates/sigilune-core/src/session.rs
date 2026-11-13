@@ -97,6 +97,11 @@ impl Session {
         self.expires_at
     }
 
+    /// 失効までの残り秒数（失効済みなら 0）。
+    pub fn seconds_left(&self) -> u64 {
+        self.expires_at.saturating_sub(now())
+    }
+
     /// クラウド HSM に SHA-256 ダイジェストの署名を依頼し、RSA PKCS#1 v1.5 署名（big-endian）を返す。
     pub fn sign_sha256(&self, digest: &[u8; 32]) -> Result<Vec<u8>> {
         ssign_core::sign::request(&self.http, &self.token, &self.card, digest)

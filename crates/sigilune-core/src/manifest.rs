@@ -11,25 +11,11 @@ use std::process::Command;
 
 /// 補助ツールの場所。`SIGILUNE_MANIFEST_TOOL` があればそれ、なければこの exe と同じフォルダーの `sigilune-manifest.exe`。
 pub fn find_tool() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("SIGILUNE_MANIFEST_TOOL") {
-        let p = PathBuf::from(p);
-        if !p.is_file() {
-            bail!(
-                "SIGILUNE_MANIFEST_TOOL does not point to a file: {}",
-                p.display()
-            );
-        }
-        return Ok(p);
-    }
-    let exe = std::env::current_exe().context("locating sigilune.exe")?;
-    let tool = exe.with_file_name("sigilune-manifest.exe");
-    if !tool.is_file() {
-        bail!(
-            "sigilune-manifest.exe was not found next to {} (it ships in the Sigilune zip)",
-            exe.display()
-        );
-    }
-    Ok(tool)
+    crate::paths::env_or_beside_exe(
+        "SIGILUNE_MANIFEST_TOOL",
+        "sigilune-manifest.exe",
+        " (it ships in the Sigilune zip)",
+    )
 }
 
 /// マニフェスト署名のオプション。

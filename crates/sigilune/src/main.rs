@@ -9,7 +9,7 @@ use sigilune_core::cert::{self, Cert};
 use sigilune_core::session::{self, LoginPolicy};
 use sigilune_core::{DEFAULT_TIMESTAMP_URL, credential, manifest, signtool, verify};
 use std::io::{IsTerminal, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use zeroize::Zeroizing;
 
@@ -363,11 +363,10 @@ fn login(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&session_json(&s)?)?);
     } else {
         let c = Cert::from_der(s.certificate_der())?;
-        let left = s.expires_at().saturating_sub(now());
         println!(
             "Session ready for {} (about {} min left).",
             s.email(),
-            left / 60
+            s.seconds_left() / 60
         );
         println!(
             "Certificate: {} (issued by {}, expires {} UTC)",
@@ -377,13 +376,6 @@ fn login(json: bool) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 fn status(json: bool) -> Result<()> {
@@ -448,7 +440,6 @@ fn logout(forget: bool) -> Result<()> {
     Ok(())
 }
 
-/// 署名対象の確認。存在・重複・既存署名を確かめ、絶対パスへ揃える。
 /// 署名済みファイルの扱い。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExistingSignature {
@@ -464,6 +455,7 @@ enum ExistingSignature {
 /// 有効な署名があるため飛ばした対象と、その検証結果。
 type SkippedTargets = Vec<(PathBuf, verify::SignatureReport)>;
 
+/// 署名対象の確認。存在・重複・既存署名を確かめ、絶対パスへ揃える。
 /// 署名する対象と、有効な署名があるため飛ばした対象を返す。
 fn prepare_targets(
     files: &[PathBuf],
@@ -521,7 +513,7 @@ fn sign(a: SignArgs) -> Result<()> {
                 "Skipped (already signed, {}, signer: {}): {}",
                 r.status_text(),
                 r.signer.as_deref().unwrap_or("-"),
-                display(f)
+                f.display()
             );
         }
     }
@@ -535,11 +527,7 @@ fn sign(a: SignArgs) -> Result<()> {
     let tool = signtool::find_signtool()?;
     let dlib = signtool::find_dlib()?;
     // 先にセッションを確立し、署名者を確定させる（dlib はこのキャッシュを使う）。
-    let s = session::acquire(if a.no_login {
-        LoginPolicy::CacheOnly
-    } else {
-        LoginPolicy::AllowLogin
-    })?;
+    let s = session::acquire(policy(a.no_login))?;
     let expected = Cert::from_der(s.certificate_der())?.common_name();
     drop(s);
 
@@ -549,7 +537,7 @@ fn sign(a: SignArgs) -> Result<()> {
             dlib: &dlib,
             metadata: None,
             timestamp_url: Some(&a.timestamp_url),
-            // 入れ子署名（/as）は検証が先頭の署名しか見ないため 0.1 では提供しない。
+            // 入れ子署名（/as）は検証が先頭の署名しか見ないため提供しない。
             append: false,
             description: a.description.as_deref(),
             description_url: a.description_url.as_deref(),
@@ -592,7 +580,7 @@ fn report_verification(
             let mark = if problems.is_empty() { "OK  " } else { "FAIL" };
             println!(
                 "{mark} {} — {}, signer: {}, timestamp: {}",
-                display(f),
+                f.display(),
                 r.status_text(),
                 r.signer.as_deref().unwrap_or("-"),
                 r.timestamp_authority
@@ -632,10 +620,6 @@ fn problems(
         v.push("no RFC 3161 timestamp".into());
     }
     v
-}
-
-fn display(p: &Path) -> String {
-    p.display().to_string()
 }
 
 fn cert(out: Option<PathBuf>, intermediate_out: Option<PathBuf>, json: bool) -> Result<()> {

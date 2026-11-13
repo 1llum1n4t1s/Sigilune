@@ -25,6 +25,36 @@ pub fn state_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// 環境変数でファイルが指定されていればそのパスを返す（未指定は `None`、ファイルでなければエラー）。
+/// `SIGILUNE_SIGNTOOL` / `SIGILUNE_DLIB` / `SIGILUNE_MANIFEST_TOOL` の上書き指定で共通に使う。
+pub fn file_from_env(var: &str) -> Result<Option<PathBuf>> {
+    let Some(p) = std::env::var_os(var) else {
+        return Ok(None);
+    };
+    let p = PathBuf::from(p);
+    if !p.is_file() {
+        bail!("{var} does not point to a file: {}", p.display());
+    }
+    Ok(Some(p))
+}
+
+/// 環境変数の指定、なければ実行中の exe（sigilune.exe）と同じフォルダーにある同梱ファイル。
+/// `missing_hint` は同梱ファイルが見つからないときのメッセージの末尾へ付ける補足（不要なら空文字）。
+pub fn env_or_beside_exe(var: &str, file_name: &str, missing_hint: &str) -> Result<PathBuf> {
+    if let Some(p) = file_from_env(var)? {
+        return Ok(p);
+    }
+    let exe = std::env::current_exe().context("locating sigilune.exe")?;
+    let file = exe.with_file_name(file_name);
+    if !file.is_file() {
+        bail!(
+            "{file_name} was not found next to {}{missing_hint}",
+            exe.display()
+        );
+    }
+    Ok(file)
+}
+
 /// DPAPI で保護したセッションキャッシュ。
 pub fn session_file() -> Result<PathBuf> {
     Ok(state_dir()?.join("session.bin"))

@@ -20,14 +20,7 @@ fn host_arch() -> &'static str {
 
 /// signtool.exe を探す。`SIGILUNE_SIGNTOOL` があればそれを使い、なければ最新の Windows SDK から選ぶ。
 pub fn find_signtool() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("SIGILUNE_SIGNTOOL") {
-        let p = PathBuf::from(p);
-        if !p.is_file() {
-            bail!(
-                "SIGILUNE_SIGNTOOL does not point to a file: {}",
-                p.display()
-            );
-        }
+    if let Some(p) = crate::paths::file_from_env("SIGILUNE_SIGNTOOL")? {
         return Ok(p);
     }
     let base = std::env::var_os("ProgramFiles(x86)")
@@ -63,19 +56,7 @@ pub fn find_signtool() -> Result<PathBuf> {
 
 /// dlib の場所。`SIGILUNE_DLIB` があればそれ、なければこの exe と同じフォルダーの `sigilune_dlib.dll`。
 pub fn find_dlib() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("SIGILUNE_DLIB") {
-        let p = PathBuf::from(p);
-        if !p.is_file() {
-            bail!("SIGILUNE_DLIB does not point to a file: {}", p.display());
-        }
-        return Ok(p);
-    }
-    let exe = std::env::current_exe().context("locating sigilune.exe")?;
-    let dll = exe.with_file_name("sigilune_dlib.dll");
-    if !dll.is_file() {
-        bail!("sigilune_dlib.dll was not found next to {}", exe.display());
-    }
-    Ok(dll)
+    crate::paths::env_or_beside_exe("SIGILUNE_DLIB", "sigilune_dlib.dll", "")
 }
 
 /// signtool の署名オプション。
