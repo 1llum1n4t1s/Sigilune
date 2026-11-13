@@ -1,0 +1,21 @@
+[package]
+name = "sigilune-dlib"
+description = "signtool /dlib 用のダイジェスト署名 DLL（Certum SimplySign クラウド鍵）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "sigilune_dlib"
+crate-type = ["cdylib"]
+
+[dependencies]
+sigilune-core = { workspace = true, features = ["local-key"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+windows-sys.workspace = true

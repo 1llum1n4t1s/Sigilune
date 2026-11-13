@@ -1,0 +1,26 @@
+[package]
+name = "sigilune-core"
+description = "Certum SimplySign のクラウド証明書で署名するための共通部（認証情報・セッション・署名・検証）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# テスト専用: ローカルの RSA 鍵で署名するバックエンド。クラウドへ接続せずに
+# signtool /dlib の受け渡し（バイト順・メモリ所有権・証明書チェーン）を検証する。
+local-key = ["dep:rsa"]
+
+[dependencies]
+ssign-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+windows-sys.workspace = true
+# ssign-core の公開関数が要求する blocking Client の型名に使う（ssign-core と同じ版に揃える）。
+reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
+rsa = { version = "0.9", features = ["sha2", "pem"], optional = true }

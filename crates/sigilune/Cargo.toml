@@ -1,0 +1,22 @@
+[package]
+name = "sigilune"
+description = "Sign every Authenticode format signtool supports with a Certum SimplySign cloud certificate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "sigilune"
+path = "src/main.rs"
+
+[dependencies]
+sigilune-core.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+clap = { version = "4", features = ["derive", "wrap_help"] }
+rpassword = "7"

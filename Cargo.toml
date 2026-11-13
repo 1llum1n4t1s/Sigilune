@@ -1,0 +1,43 @@
+# Sigilune: Certum SimplySign のクラウド証明書で、signtool が扱える全形式に
+# Authenticode 署名するためのワークスペース。
+#   - sigilune-core : 認証情報・セッション・クラウド署名・検証の共通部
+#   - sigilune      : CLI（sigilune.exe）
+#   - sigilune-dlib : signtool /dlib 用のダイジェスト署名 DLL
+[workspace]
+members = ["crates/sigilune-core", "crates/sigilune", "crates/sigilune-dlib"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "MIT"
+authors = ["Kagayoi"]
+repository = "https://github.com/1llum1n4t1s/Sigilune"
+
+[workspace.dependencies]
+sigilune-core = { path = "crates/sigilune-core" }
+# クラウド側の非公式プロトコル実装。挙動の変化を避けるため完全一致で固定する。
+ssign-core = "=0.1.8"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1.9"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+] }
+
+[profile.release]
+# 配布用 exe/dll を小さくし、パニックはプロセス境界で止める（dlib は catch_unwind で処理する）。
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
