@@ -29,7 +29,7 @@ impl DigestSigner for Session {
 /// dlib のメタデータで明示したときだけ使われる。
 #[cfg(feature = "local-key")]
 pub struct LocalKeySigner {
-    key: rsa::RsaPrivateKey,
+    key: rsa::PrivateKey,
     cert_der: Vec<u8>,
 }
 
@@ -40,7 +40,7 @@ impl LocalKeySigner {
         use rsa::pkcs8::DecodePrivateKey;
         let pem = std::fs::read_to_string(key_pem)
             .with_context(|| format!("reading {}", key_pem.display()))?;
-        let key = rsa::RsaPrivateKey::from_pkcs8_pem(&pem)
+        let key = rsa::PrivateKey::from_pkcs8_pem(&pem)
             .context("parsing the test private key (PKCS#8 PEM)")?;
         let raw = std::fs::read(cert).with_context(|| format!("reading {}", cert.display()))?;
         let cert_der = crate::cert::Cert::from_der(&raw)?.der().to_vec();

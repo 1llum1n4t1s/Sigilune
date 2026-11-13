@@ -23,4 +23,4 @@ zeroize.workspace = true
 windows-sys.workspace = true
 # ssign-core の公開関数が要求する blocking Client の型名に使う（ssign-core と同じ版に揃える）。
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
-rsa = { version = "0.9", features = ["sha2", "pem"], optional = true }
+rsa = { version = "0.10", features = ["pkcs1v15"], optional = true }

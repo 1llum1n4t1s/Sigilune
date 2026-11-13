@@ -19,29 +19,48 @@ const FIXTURES: &str = concat!(
 
 /// テスト対象の cdylib を返す。
 ///
-/// `cargo test` は結合テストからリンクできない cdylib をビルドしないため、同じビルド先・同じ
-/// プロファイルで `cargo build -p sigilune-dlib` を実行してから使う（ビルド済みなら即終了する）。
+/// `cargo test` は結合テストからリンクできない cdylib をビルドしないため、同じプロファイルで
+/// `cargo build -p sigilune-dlib` を実行してから使う（ビルド済みなら即終了する）。
 /// 並列実行される各テストからの呼出しは Cargo のビルドロックで直列化される。
+///
+/// テスト実行ファイルの置き場所（build-dir）と成果物の置き場所は Cargo の版や設定で変わるため、
+/// パスを推測せず、Cargo が JSON で報告する成果物のパスを使う。ビルド先は CARGO_TARGET_DIR など
+/// テスト実行時と同じ環境変数・設定から Cargo 自身が決める。
 fn dlib_path() -> PathBuf {
-    // tests の実行ファイルは <target>/<profile>/deps にある。
-    let deps = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let profile_dir = deps.parent().unwrap();
-    let target_dir = profile_dir.parent().unwrap();
     let mut cmd = std::process::Command::new(env!("CARGO"));
-    cmd.args(["build", "--quiet", "-p", "sigilune-dlib", "--target-dir"])
-        .arg(target_dir);
-    if profile_dir.file_name().is_some_and(|n| n == "release") {
+    cmd.args([
+        "build",
+        "--quiet",
+        "-p",
+        "sigilune-dlib",
+        "--message-format=json-render-diagnostics",
+    ])
+    .current_dir(env!("CARGO_MANIFEST_DIR"))
+    .stdout(std::process::Stdio::piped())
+    // コンパイルエラーなどの診断は stderr に出るので、失敗時に原因が見えるよう流しておく。
+    .stderr(std::process::Stdio::inherit());
+    // テストバイナリと同じプロファイル（debug / release）の dlib を使う。
+    if !cfg!(debug_assertions) {
         cmd.arg("--release");
     }
-    let status = cmd
-        .status()
+    let out = cmd
+        .output()
         .expect("starting cargo build for sigilune-dlib");
-    assert!(status.success(), "cargo build -p sigilune-dlib failed");
-    let dll = profile_dir.join("sigilune_dlib.dll");
+    assert!(out.status.success(), "cargo build -p sigilune-dlib failed");
+    let dll = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "sigilune_dlib")
+        .flat_map(|m| {
+            m["filenames"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+        })
+        .filter_map(|f| f.as_str().map(PathBuf::from))
+        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")))
+        .expect("cargo did not report sigilune_dlib.dll");
     assert!(dll.is_file(), "missing {}", dll.display());
     dll
 }

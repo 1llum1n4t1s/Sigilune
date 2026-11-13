@@ -10,7 +10,7 @@ resolver = "3"
 [workspace.package]
 version = "1.1.0"
 edition = "2024"
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 license = "MIT"
 authors = ["Kagayoi"]
 repository = "https://github.com/1llum1n4t1s/Sigilune"
