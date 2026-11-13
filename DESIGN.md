@@ -11,12 +11,11 @@ Sigilune の現在の設計・境界・データの流れ・不変条件をま�
 
 ## 構成
 
-| crate | 種類 | 役割 |
+| 構成要素 | 種類 | 役割 |
 | --- | --- | --- |
 | `sigilune-core` | lib | 資格情報（Credential Manager）、DPAPI、セッション、証明書、signtool の起動、WinVerifyTrust による検証 |
-| `sigilune` | bin (`sigilune.exe`) | CLI：`setup` / `login` / `status` / `logout` / `sign` / `verify` / `cert` |
+| `sigilune` | bin (`sigilune.exe`) | CLI：`setup` / `login` / `status` / `logout` / `sign` / `verify` / `cert` / `sign-manifest` / `verify-manifest` / `sign-hash` |
 | `sigilune-dlib` | cdylib (`sigilune_dlib.dll`) | signtool `/dlib` 用：`AuthenticodeDigestSignEx` と `…WithFileHandle` |
-
 | `dotnet/Sigilune.Manifest` | .NET Framework 4.8 exe (`sigilune-manifest.exe`) | ClickOnce / VSTO マニフェストの XML 署名・参照更新・検証。`sigilune sign-manifest` / `verify-manifest` から起動される |
 
 クラウドとの HTTPS 通信は `ssign-core`（MIT, Le-Syl21/ssign）の公開関数 `auth::login` / `card::fetch` / `sign::request` / `client::client` を使う。`ssign-core` 自身の平文トークンキャッシュ（`CloudSession`）は使わない。
