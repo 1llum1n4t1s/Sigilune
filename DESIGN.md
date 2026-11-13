@@ -7,7 +7,7 @@ Sigilune の現在の設計・境界・データの流れ・不変条件をま�
 - Certum SimplySign のクラウドにあるコード署名用の鍵で、signtool が扱えるすべての形式に Authenticode 署名する。
 - SimplySign Desktop と手入力のワンタイムコードを不要にし、ビルドスクリプトや Velopack などから1コマンドで呼べるようにする。
 - signtool では署名できない ClickOnce / VSTO マニフェストにも、同じクラウド鍵で XML 署名する。
-- 対象は Windows x64。本人の PC のほか、承認つき Environment の Secrets で GitHub Actions からも署名できる（Sigilune 自身の CI はテスト鍵だけを使う）。
+- 対象は Windows x64。本人の PC のほか、ブランチを制限した Environment の Secrets で GitHub Actions からも署名できる（Sigilune 自身の CI はテスト鍵だけを使う）。
 
 ## 構成
 
@@ -46,7 +46,7 @@ signtool はマニフェストの XML 署名を作れないため、MSBuild の 
 
 ## セッションと秘密情報
 
-- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの承認つき Environment `release` の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
+- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの Environment `release`（ブランチ制限あり・承認者なし。`/vava` を離席中も完走させるため）の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
 - **セッションキャッシュ**：`%LOCALAPPDATA%\Sigilune\session.bin`（`SIGILUNE_HOME` で変更）。中身はトークン・カード番号・証明書 PEM の JSON を DPAPI（現在のユーザー、追加エントロピー `Sigilune.Session.v1`）で保護したもの。有効期間はログインから20分とし、残り120秒未満は使わない。
 - **補助状態**：同フォルダーの `state.json` に、最後にログインへ使った TOTP の時間枠（`last_otp_step`）だけを保存する。秘密は含まない。
 - **パッケージアプリ配下での注意**：MSIX パッケージのアプリ（例：Claude デスクトップ）から起動したプロセスでは `%LOCALAPPDATA%` への新規書込みが `Packages\<pkg>\LocalCache\Local` へ振り替えられ、通常の端末とキャッシュ・`state.json` が別になる。その場合は余分なログインが起こり得て、TOTP 時間枠の記録も別々になる（同じ枠を二重に使うとログインが拒否されるだけで、自動再試行はしない）。共有したいときは `SIGILUNE_HOME` で同じ実フォルダーを指定する。資格情報マネージャーは振替えの対象外で共通。
@@ -62,7 +62,7 @@ signtool はマニフェストの XML 署名を作れないため、MSBuild の 
 - 同梱の中間証明書は署名者の発行者と一致したものだけをチェーン用ストアへ追加する。
 - `ssign-core` は完全一致（`=0.1.8`）で固定する。上げるときは本番アカウントで exe と MSIX の署名・検証をやり直す。
 - テスト用ローカル鍵バックエンドは dlib のメタデータ（`/dmdf`）で `local_key_pem` と `local_cert` を両方指定したときだけ使われる。
-- リリース（`release.yml`）は `v1.2.3` 形式のタグの push でだけ起動する。利用者向けのメジャー版タグ（`v1`）は付け替えるため、`v*` では本番署名と公開が意図せず走る。タグとクレートの版が違えば止める。署名用 Secrets は承認つき Environment `release` にだけ置く。
+- リリース（`release.yml`）は `v1.2.3` 形式のタグの push でだけ起動する。利用者向けのメジャー版タグ（`v1`）は付け替えるため、`v*` では本番署名と公開が意図せず走る。タグとクレートの版が違えば止める。署名用 Secrets は Environment `release`（main と `v*` タグだけ許可）にだけ置く。
 
 ## 検証済みの事実（2026-11-13）
 

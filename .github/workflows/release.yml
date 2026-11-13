@@ -3,7 +3,7 @@ name: Release
 # 配布用 zip（sigilune.exe / sigilune_dlib.dll / sigilune-manifest.exe）を作り、Sigilune 自身で Certum のクラウド鍵により署名する。
 # - v* タグの push: 署名済み zip と SHA256 を GitHub Release として公開する。
 # - 手動実行: 署名済み zip を Actions の成果物として残すだけ（公開しない）。
-# 署名用の Secrets は Environment "release"（実行ごとに本人の承認が必要）にだけ置く。
+# 署名用の Secrets は Environment "release"（main と v* タグだけ許可、承認者なし）にだけ置く。
 on:
   push:
     # v1.2.3 形式だけ。メジャー版タグ（v1）の付け替えでは起動しない。

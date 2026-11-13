@@ -11,7 +11,7 @@ branding:
 #     env:
 #       SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
 #       SIGILUNE_TOTP_URI: ${{ secrets.SIGILUNE_TOTP_URI }}
-# Secrets は承認つき Environment に置き、署名するジョブで `environment:` を指定する。
+# Secrets はブランチを制限した Environment に置き、署名するジョブで `environment:` を指定する。
 #
 # 入れる版の決め方（利用側の更新方法と対応させる）:
 #   1. inputs.version を指定 → その版

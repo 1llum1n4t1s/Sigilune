@@ -34,7 +34,7 @@ pub struct StoredCredential {
 /// 環境変数（`SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI`）からアカウント情報を読む。
 ///
 /// GitHub Actions などの CI では資格情報マネージャーへ事前登録できないため、
-/// 承認つき Environment の Secrets を環境変数で渡す。片方だけの指定は設定ミスとして拒否する。
+/// ブランチを制限した Environment の Secrets を環境変数で渡す。片方だけの指定は設定ミスとして拒否する。
 pub fn from_env() -> Result<Option<StoredCredential>> {
     parse_env_pair(
         std::env::var(ENV_EMAIL).ok(),

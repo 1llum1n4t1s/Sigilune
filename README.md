@@ -68,7 +68,7 @@ sigilune sign .\MyApp.exe
 
 ## GitHub Actions
 
-Use the bundled action on a Windows runner. Put the two secrets in an **Environment that requires your approval** (Settings → Environments → required reviewers) and reference it from the signing job:
+Use the bundled action on a Windows runner. Put the two secrets in an **Environment limited to your release branches and tags** (Settings → Environments → Deployment branches and tags) and reference it from the signing job. Adding required reviewers makes every run wait for your approval; leave them out if releases should finish unattended:
 
 ```yaml
 jobs:
@@ -157,7 +157,7 @@ sigilune sign-manifest --application ".\publish\Application Files\MyAddIn_1_0_0_
 
 | Variable | Purpose |
 | --- | --- |
-| `SIGILUNE_EMAIL` + `SIGILUNE_TOTP_URI` | Account e-mail and `otpauth://` URI for CI, used instead of Credential Manager. Set both or neither. On GitHub Actions, keep them as secrets of an Environment that requires your approval. |
+| `SIGILUNE_EMAIL` + `SIGILUNE_TOTP_URI` | Account e-mail and `otpauth://` URI for CI, used instead of Credential Manager. Set both or neither. On GitHub Actions, keep them as secrets of an Environment limited to your release branches and tags. |
 | `SIGILUNE_SIGNTOOL` | Path to `signtool.exe` (default: newest Windows SDK). |
 | `SIGILUNE_DLIB` | Path to `sigilune_dlib.dll` (default: next to `sigilune.exe`). |
 | `SIGILUNE_CREDENTIAL` | Credential Manager entry name (default `Sigilune/Certum SimplySign`); use different names for several accounts. |
