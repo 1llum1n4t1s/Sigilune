@@ -36,7 +36,7 @@ pwsh -File tests/Test-ManifestSigning.ps1 -Tool <出力先>\sigilune-manifest.ex
 ## 変更時の注意
 
 - 利用者向けの出力・README は英語、コードコメントは日本語で書く。
-- `ssign-core` の版を上げるときは、本番アカウントで exe と MSIX の署名・独立検証をやり直してから固定を更新する。
+- `ssign-core` の版を上げるときは、本番アカウントで exe と MSIX の署名・独立検証をやり直してから固定を更新する。Dependabot（`.github/dependabot.yml`）は `ssign-core` と、版を揃える `reqwest` をグループに入れず単独 PR にしているので、この2つの PR は検証前に取り込まない。
 - dlib の FFI 契約（`HeapAlloc(GetProcessHeap())`、証明書の所有権移譲、SHA-256 のみ、パニック捕捉）を崩さない。
 - セッションの排他・TOTP 時間枠の記録・自動再試行なしを崩さない（並列署名と Certum のコード再利用拒否に対応するため）。
 - `dotnet/Sigilune.Manifest` は MSBuild の `mansign2.cs`（MIT）の移植。署名 XML の組み立て順序と改行の扱いを変えると `mage.exe` との一致テストが崩れるので、変えるときはテストで確認する。補助ツールの版は release.yml が Cargo の版を渡す。
