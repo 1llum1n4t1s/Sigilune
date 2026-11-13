@@ -136,3 +136,5 @@ Set-Content -LiteralPath $tampered -Value $modified -NoNewline -Encoding utf8
 & $Tool verify --allow-no-timestamp --allow-untrusted-chain --no-revocation $tampered | Out-Null
 if ($LASTEXITCODE -eq 0) { throw '[tamper] a modified manifest passed verification' }
 Write-Host 'PASS [tamper] a modified manifest fails verification'
+# 直前の改ざん検証は意図どおり非0で終わるため、その終了コードがスクリプトの結果として残らないよう明示する。
+exit 0
