@@ -86,6 +86,7 @@ The dlib uses the cached session, or logs in with the stored registration if the
 
 | Variable | Purpose |
 | --- | --- |
+| `SIGILUNE_EMAIL` + `SIGILUNE_TOTP_URI` | Account e-mail and `otpauth://` URI for CI, used instead of Credential Manager. Set both or neither. On GitHub Actions, keep them as secrets of an Environment that requires your approval. |
 | `SIGILUNE_SIGNTOOL` | Path to `signtool.exe` (default: newest Windows SDK). |
 | `SIGILUNE_DLIB` | Path to `sigilune_dlib.dll` (default: next to `sigilune.exe`). |
 | `SIGILUNE_CREDENTIAL` | Credential Manager entry name (default `Sigilune/Certum SimplySign`); use different names for several accounts. |

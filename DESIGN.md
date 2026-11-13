@@ -30,7 +30,7 @@ Sigilune の現在の設計・境界・データの流れ・不変条件をま�
 
 ## セッションと秘密情報
 
-- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI。
+- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの承認つき Environment `release` の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
 - **セッションキャッシュ**：`%LOCALAPPDATA%\Sigilune\session.bin`（`SIGILUNE_HOME` で変更）。中身はトークン・カード番号・証明書 PEM の JSON を DPAPI（現在のユーザー、追加エントロピー `Sigilune.Session.v1`）で保護したもの。有効期間はログインから20分とし、残り120秒未満は使わない。
 - **補助状態**：同フォルダーの `state.json` に、最後にログインへ使った TOTP の時間枠（`last_otp_step`）だけを保存する。秘密は含まない。
 - **パッケージアプリ配下での注意**：MSIX パッケージのアプリ（例：Claude デスクトップ）から起動したプロセスでは `%LOCALAPPDATA%` への新規書込みが `Packages\<pkg>\LocalCache\Local` へ振り替えられ、通常の端末とキャッシュ・`state.json` が別になる。その場合は余分なログインが起こり得て、TOTP 時間枠の記録も別々になる（同じ枠を二重に使うとログインが拒否されるだけで、自動再試行はしない）。共有したいときは `SIGILUNE_HOME` で同じ実フォルダーを指定する。資格情報マネージャーは振替えの対象外で共通。

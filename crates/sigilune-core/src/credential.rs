@@ -18,10 +18,50 @@ use zeroize::Zeroizing;
 /// 既定の資格情報名。環境変数 `SIGILUNE_CREDENTIAL` で別名にできる（テスト・複数アカウント用）。
 pub const DEFAULT_TARGET: &str = "Sigilune/Certum SimplySign";
 
+/// CI 用: アカウントのメールを渡す環境変数。
+pub const ENV_EMAIL: &str = "SIGILUNE_EMAIL";
+/// CI 用: otpauth URI（または Base32 秘密値）を渡す環境変数。
+pub const ENV_TOTP_URI: &str = "SIGILUNE_TOTP_URI";
+
 /// 保存されたアカウント情報。
 pub struct StoredCredential {
     pub email: String,
     pub otpauth: Zeroizing<String>,
+    /// 環境変数から読んだか（資格情報マネージャーではなく）。
+    pub from_env: bool,
+}
+
+/// 環境変数（`SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI`）からアカウント情報を読む。
+///
+/// GitHub Actions などの CI では資格情報マネージャーへ事前登録できないため、
+/// 承認つき Environment の Secrets を環境変数で渡す。片方だけの指定は設定ミスとして拒否する。
+pub fn from_env() -> Result<Option<StoredCredential>> {
+    parse_env_pair(
+        std::env::var(ENV_EMAIL).ok(),
+        std::env::var(ENV_TOTP_URI).ok().map(Zeroizing::new),
+    )
+}
+
+/// 環境変数の組を解釈する（テストのため環境から切り離す）。空文字は未指定とみなす。
+fn parse_env_pair(
+    email: Option<String>,
+    uri: Option<Zeroizing<String>>,
+) -> Result<Option<StoredCredential>> {
+    let email = email.filter(|s| !s.trim().is_empty());
+    let uri = uri.filter(|s| !s.trim().is_empty());
+    match (email, uri) {
+        (None, None) => Ok(None),
+        (Some(email), Some(uri)) => {
+            validate_email(&email)?;
+            validate_otpauth(&uri)?;
+            Ok(Some(StoredCredential {
+                email: email.trim().to_owned(),
+                otpauth: Zeroizing::new(uri.trim().to_owned()),
+                from_env: true,
+            }))
+        }
+        _ => bail!("set both {ENV_EMAIL} and {ENV_TOTP_URI}, or neither"),
+    }
 }
 
 /// 使用する資格情報名。
@@ -78,8 +118,16 @@ pub fn store(email: &str, otpauth: &str) -> Result<()> {
     Ok(())
 }
 
-/// 読み出し。未登録なら `Ok(None)`。
+/// 読み出し。環境変数が指定されていればそれを優先し、なければ資格情報マネージャーから読む。未登録なら `Ok(None)`。
 pub fn load() -> Result<Option<StoredCredential>> {
+    if let Some(c) = from_env()? {
+        return Ok(Some(c));
+    }
+    load_stored()
+}
+
+/// 資格情報マネージャーからだけ読む。未登録なら `Ok(None)`。
+pub fn load_stored() -> Result<Option<StoredCredential>> {
     let target_w = wide(target());
     let mut p: *mut CREDENTIALW = null_mut();
     // SAFETY: 成功時 p は CredFree で解放する。
@@ -97,7 +145,11 @@ pub fn load() -> Result<Option<StoredCredential>> {
         blob.fill(0);
         let email = from_wide_ptr(c.UserName);
         CredFree(p as _);
-        Ok(Some(StoredCredential { email, otpauth }))
+        Ok(Some(StoredCredential {
+            email,
+            otpauth,
+            from_env: false,
+        }))
     }
 }
 
@@ -120,6 +172,30 @@ pub fn delete() -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_pair_must_be_complete_and_valid() {
+        let uri = || {
+            Some(Zeroizing::new(
+                "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=SHA256&digits=6&period=30"
+                    .to_owned(),
+            ))
+        };
+        assert!(parse_env_pair(None, None).unwrap().is_none());
+        assert!(
+            parse_env_pair(Some(" ".into()), Some(Zeroizing::new(String::new())))
+                .unwrap()
+                .is_none()
+        );
+        assert!(parse_env_pair(Some("dev@example.com".into()), None).is_err());
+        assert!(parse_env_pair(None, uri()).is_err());
+        assert!(parse_env_pair(Some("not-an-email".into()), uri()).is_err());
+        let c = parse_env_pair(Some(" dev@example.com ".into()), uri())
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.email, "dev@example.com");
+        assert!(c.from_env);
+    }
 
     #[test]
     fn rejects_malformed_inputs() {

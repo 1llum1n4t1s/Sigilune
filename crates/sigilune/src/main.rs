@@ -240,12 +240,19 @@ fn status(json: bool) -> Result<()> {
                 "credential_target": credential::target(),
                 "registered": cred.is_some(),
                 "email": cred.as_ref().map(|c| c.email.clone()),
+                "source": cred.as_ref().map(|c| if c.from_env { "environment" } else { "credential_manager" }),
                 "session": cache,
             }))?
         );
         return Ok(());
     }
     match &cred {
+        Some(c) if c.from_env => println!(
+            "Registration: {} (from {} / {})",
+            c.email,
+            credential::ENV_EMAIL,
+            credential::ENV_TOTP_URI
+        ),
         Some(c) => println!("Registration: {} ({})", c.email, credential::target()),
         None => println!("Registration: none (run `sigilune setup`)"),
     }
