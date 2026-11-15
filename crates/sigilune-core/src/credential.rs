@@ -16,7 +16,7 @@ use windows_sys::Win32::Security::Credentials::{
 use zeroize::Zeroizing;
 
 /// 既定の資格情報名。環境変数 `SIGILUNE_CREDENTIAL` で別名にできる（テスト・複数アカウント用）。
-pub const DEFAULT_TARGET: &str = "Sigilune/Certum SimplySign";
+const DEFAULT_TARGET: &str = "Sigilune/Certum SimplySign";
 
 /// CI 用: アカウントのメールを渡す環境変数。
 pub const ENV_EMAIL: &str = "SIGILUNE_EMAIL";
@@ -35,7 +35,7 @@ pub struct StoredCredential {
 ///
 /// GitHub Actions などの CI では資格情報マネージャーへ事前登録できないため、
 /// ブランチを制限した Environment の Secrets を環境変数で渡す。片方だけの指定は設定ミスとして拒否する。
-pub fn from_env() -> Result<Option<StoredCredential>> {
+fn from_env() -> Result<Option<StoredCredential>> {
     parse_env_pair(
         std::env::var(ENV_EMAIL).ok(),
         std::env::var(ENV_TOTP_URI).ok().map(Zeroizing::new),
@@ -73,7 +73,7 @@ pub fn target() -> String {
 }
 
 /// otpauth URI（または Base32 秘密値）が Certum の TOTP として解釈できるか確認する。
-pub fn validate_otpauth(otpauth: &str) -> Result<()> {
+fn validate_otpauth(otpauth: &str) -> Result<()> {
     ssign_core::otp::Totp::parse(otpauth.trim())
         .map(|_| ())
         .map_err(|_| {
@@ -82,7 +82,7 @@ pub fn validate_otpauth(otpauth: &str) -> Result<()> {
 }
 
 /// メールの最低限の形式確認（空・空白・@ なしを拒否する）。
-pub fn validate_email(email: &str) -> Result<()> {
+fn validate_email(email: &str) -> Result<()> {
     let e = email.trim();
     if e.is_empty() || e.contains(char::is_whitespace) || !e.contains('@') {
         bail!("the account e-mail looks invalid");
@@ -127,7 +127,7 @@ pub fn load() -> Result<Option<StoredCredential>> {
 }
 
 /// 資格情報マネージャーからだけ読む。未登録なら `Ok(None)`。
-pub fn load_stored() -> Result<Option<StoredCredential>> {
+fn load_stored() -> Result<Option<StoredCredential>> {
     let target_w = wide(target());
     let mut p: *mut CREDENTIALW = null_mut();
     // SAFETY: 成功時 p は CredFree で解放する。

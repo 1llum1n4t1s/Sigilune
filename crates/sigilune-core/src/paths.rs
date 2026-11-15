@@ -6,13 +6,17 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
+/// 保存先を上書きする環境変数。保存先（`state_dir`）とミューテックス名（`instance_tag`）は
+/// 同じ値から決まる必要があるため、名前を1か所で持つ。
+const ENV_HOME: &str = "SIGILUNE_HOME";
+
 /// 状態フォルダー（なければ作成する）。
-pub fn state_dir() -> Result<PathBuf> {
-    let dir = match std::env::var_os("SIGILUNE_HOME") {
+fn state_dir() -> Result<PathBuf> {
+    let dir = match std::env::var_os(ENV_HOME) {
         Some(home) => {
             let p = PathBuf::from(home);
             if !p.is_absolute() {
-                bail!("SIGILUNE_HOME must be an absolute path");
+                bail!("{ENV_HOME} must be an absolute path");
             }
             p
         }
@@ -27,7 +31,7 @@ pub fn state_dir() -> Result<PathBuf> {
 
 /// 環境変数でファイルが指定されていればそのパスを返す（未指定は `None`、ファイルでなければエラー）。
 /// `SIGILUNE_SIGNTOOL` / `SIGILUNE_DLIB` / `SIGILUNE_MANIFEST_TOOL` の上書き指定で共通に使う。
-pub fn file_from_env(var: &str) -> Result<Option<PathBuf>> {
+pub(crate) fn file_from_env(var: &str) -> Result<Option<PathBuf>> {
     let Some(p) = std::env::var_os(var) else {
         return Ok(None);
     };
@@ -40,7 +44,7 @@ pub fn file_from_env(var: &str) -> Result<Option<PathBuf>> {
 
 /// 環境変数の指定、なければ実行中の exe（sigilune.exe）と同じフォルダーにある同梱ファイル。
 /// `missing_hint` は同梱ファイルが見つからないときのメッセージの末尾へ付ける補足（不要なら空文字）。
-pub fn env_or_beside_exe(var: &str, file_name: &str, missing_hint: &str) -> Result<PathBuf> {
+pub(crate) fn env_or_beside_exe(var: &str, file_name: &str, missing_hint: &str) -> Result<PathBuf> {
     if let Some(p) = file_from_env(var)? {
         return Ok(p);
     }
@@ -56,18 +60,18 @@ pub fn env_or_beside_exe(var: &str, file_name: &str, missing_hint: &str) -> Resu
 }
 
 /// DPAPI で保護したセッションキャッシュ。
-pub fn session_file() -> Result<PathBuf> {
+pub(crate) fn session_file() -> Result<PathBuf> {
     Ok(state_dir()?.join("session.bin"))
 }
 
 /// 秘密を含まない補助状態（最後に使った TOTP の時間枠など）。
-pub fn state_file() -> Result<PathBuf> {
+pub(crate) fn state_file() -> Result<PathBuf> {
     Ok(state_dir()?.join("state.json"))
 }
 
 /// 名前付きミューテックス名の接尾辞。`SIGILUNE_HOME` ごとに分け、テストが本番と干渉しないようにする。
-pub fn instance_tag() -> String {
-    match std::env::var_os("SIGILUNE_HOME") {
+pub(crate) fn instance_tag() -> String {
+    match std::env::var_os(ENV_HOME) {
         None => "default".into(),
         Some(home) => {
             // パス文字列を単純なハッシュへ縮め、ミューテックス名に使えない文字を避ける。

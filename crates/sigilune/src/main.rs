@@ -537,8 +537,6 @@ fn sign(a: SignArgs) -> Result<()> {
             dlib: &dlib,
             metadata: None,
             timestamp_url: Some(&a.timestamp_url),
-            // 入れ子署名（/as）は検証が先頭の署名しか見ないため提供しない。
-            append: false,
             description: a.description.as_deref(),
             description_url: a.description_url.as_deref(),
         },
@@ -654,7 +652,11 @@ mod tests {
     fn report(valid: bool, signer: Option<&str>, ts: bool) -> verify::SignatureReport {
         verify::SignatureReport {
             path: "x".into(),
-            status: if valid { 0 } else { 0x800B_0109 },
+            status: if valid {
+                0
+            } else {
+                verify::CERT_E_UNTRUSTEDROOT
+            },
             valid,
             signed: true,
             signer: signer.map(str::to_owned),

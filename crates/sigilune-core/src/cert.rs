@@ -13,14 +13,13 @@ use windows_sys::Win32::Security::Cryptography::{
 };
 use windows_sys::Win32::System::Time::FileTimeToSystemTime;
 
-pub(crate) const ENCODING: u32 = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+const ENCODING: u32 = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
 
 /// 所有権付きの証明書コンテキスト。ドロップで解放する。
+///
+/// スレッド間で渡す・共有する利用は無いため `Send` / `Sync` は実装しない
+/// （署名器が保持するのは DER のバイト列で、`Cert` は関数内で作って使い切る）。
 pub struct Cert(*const CERT_CONTEXT);
-
-// CERT_CONTEXT は参照カウント付きで、読み取り専用の利用はスレッド間で安全。
-unsafe impl Send for Cert {}
-unsafe impl Sync for Cert {}
 
 impl Cert {
     /// DER（または PEM）から作る。
@@ -44,7 +43,7 @@ impl Cert {
     ///
     /// # Safety
     /// `p` は有効な CERT_CONTEXT であること。
-    pub unsafe fn duplicate(p: *const CERT_CONTEXT) -> Self {
+    pub(crate) unsafe fn duplicate(p: *const CERT_CONTEXT) -> Self {
         Self(unsafe { CertDuplicateCertificateContext(p) })
     }
 
@@ -123,7 +122,7 @@ impl Cert {
     }
 
     /// `self` の発行者が `issuer` の主体と一致するか。
-    pub fn is_issued_by(&self, issuer: &Cert) -> bool {
+    fn is_issued_by(&self, issuer: &Cert) -> bool {
         // SAFETY: 両コンテキストは有効。
         unsafe {
             CertCompareCertificateName(
@@ -144,7 +143,7 @@ impl Drop for Cert {
     }
 }
 
-pub(crate) fn hex_upper(b: &[u8]) -> String {
+fn hex_upper(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02X}")).collect()
 }
 

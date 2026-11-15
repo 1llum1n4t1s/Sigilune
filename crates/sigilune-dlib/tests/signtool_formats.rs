@@ -8,10 +8,9 @@
 #![cfg(windows)]
 
 use sigilune_core::signtool::{SignOptions, find_signtool, sign};
-use sigilune_core::verify::inspect;
+use sigilune_core::verify::{CERT_E_UNTRUSTEDROOT, inspect};
 use std::path::{Path, PathBuf};
 
-const CERT_UNTRUSTEDROOT: u32 = 0x800B_0109;
 const FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../sigilune-core/tests/fixtures"
@@ -100,7 +99,6 @@ fn sign_and_check(dir: &Path, files: &[PathBuf]) {
             metadata: Some(&meta),
             // テストでは外部 TSA に依存しない。
             timestamp_url: None,
-            append: false,
             description: None,
             description_url: None,
         },
@@ -112,7 +110,7 @@ fn sign_and_check(dir: &Path, files: &[PathBuf]) {
         assert!(r.signed, "{}: not signed", f.display());
         assert_eq!(
             r.status,
-            CERT_UNTRUSTEDROOT,
+            CERT_E_UNTRUSTEDROOT,
             "{}: {}",
             f.display(),
             r.status_text()

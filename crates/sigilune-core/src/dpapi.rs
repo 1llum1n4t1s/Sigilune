@@ -22,7 +22,7 @@ fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
 }
 
 /// 平文を保護する。
-pub fn protect(plain: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn protect(plain: &[u8]) -> Result<Vec<u8>> {
     let input = blob(plain);
     let entropy = blob(ENTROPY);
     let mut out = CRYPT_INTEGER_BLOB {
@@ -50,7 +50,7 @@ pub fn protect(plain: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// 保護済みデータを復号する。復号結果はドロップ時に消去する。
-pub fn unprotect(sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+pub(crate) fn unprotect(sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let input = blob(sealed);
     let entropy = blob(ENTROPY);
     let mut out = CRYPT_INTEGER_BLOB {

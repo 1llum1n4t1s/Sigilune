@@ -10,6 +10,7 @@ use anyhow::Result;
 use serde::Serialize;
 use std::path::Path;
 use std::ptr::null_mut;
+use windows_sys::Win32::Foundation;
 use windows_sys::Win32::Security::WinTrust::{
     WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
     WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
@@ -17,10 +18,18 @@ use windows_sys::Win32::Security::WinTrust::{
     WTHelperProvDataFromStateData, WinVerifyTrust,
 };
 
+// WinVerifyTrust が返す HRESULT。値は Windows SDK の定義（windows-sys）を使い、
+// 報告（`status: u32`）と突き合わせやすいよう符号なしで持つ。
 /// 署名されていない（TRUST_E_NOSIGNATURE）。
-pub const TRUST_E_NOSIGNATURE: u32 = 0x800B_0100;
+const TRUST_E_NOSIGNATURE: u32 = Foundation::TRUST_E_NOSIGNATURE as u32;
 /// 署名形式に対応していない（TRUST_E_SUBJECT_FORM_UNKNOWN）。
-pub const TRUST_E_SUBJECT_FORM_UNKNOWN: u32 = 0x800B_0003;
+pub const TRUST_E_SUBJECT_FORM_UNKNOWN: u32 = Foundation::TRUST_E_SUBJECT_FORM_UNKNOWN as u32;
+/// 署名値は正しいが、ルート証明書が信頼されていない（CERT_E_UNTRUSTEDROOT）。
+pub const CERT_E_UNTRUSTEDROOT: u32 = Foundation::CERT_E_UNTRUSTEDROOT as u32;
+/// ファイルの内容が署名時のダイジェストと一致しない（TRUST_E_BAD_DIGEST）。
+const TRUST_E_BAD_DIGEST: u32 = Foundation::TRUST_E_BAD_DIGEST as u32;
+/// 署名値が不正（NTE_BAD_SIGNATURE）。
+const NTE_BAD_SIGNATURE: u32 = Foundation::NTE_BAD_SIGNATURE as u32;
 
 /// 検証結果。
 #[derive(Debug, Serialize)]
@@ -44,9 +53,9 @@ impl SignatureReport {
             0 => "Valid".into(),
             TRUST_E_NOSIGNATURE => "NotSigned".into(),
             TRUST_E_SUBJECT_FORM_UNKNOWN => "UnsupportedFormat".into(),
-            0x800B_0109 => "UntrustedRoot (0x800B0109)".into(),
-            0x8009_6010 => "HashMismatch (0x80096010)".into(),
-            0x8009_0006 => "BadSignature (0x80090006)".into(),
+            CERT_E_UNTRUSTEDROOT => "UntrustedRoot (0x800B0109)".into(),
+            TRUST_E_BAD_DIGEST => "HashMismatch (0x80096010)".into(),
+            NTE_BAD_SIGNATURE => "BadSignature (0x80090006)".into(),
             s => format!("Invalid (0x{s:08X})"),
         }
     }

@@ -60,6 +60,8 @@ pub fn find_dlib() -> Result<PathBuf> {
 }
 
 /// signtool の署名オプション。
+///
+/// 入れ子署名（`/as`）は、検証（`verify::inspect`）が先頭の署名しか見ないため提供しない。
 pub struct SignOptions<'a> {
     pub signtool: &'a Path,
     pub dlib: &'a Path,
@@ -67,8 +69,6 @@ pub struct SignOptions<'a> {
     pub metadata: Option<&'a Path>,
     /// RFC 3161 タイムスタンプサーバー。`None` はタイムスタンプなし（テスト用）。
     pub timestamp_url: Option<&'a str>,
-    /// 追加の署名として付ける（`/as`）。既定は置き換え。
-    pub append: bool,
     pub description: Option<&'a str>,
     pub description_url: Option<&'a str>,
 }
@@ -86,9 +86,6 @@ pub fn sign(opts: &SignOptions, files: &[PathBuf]) -> Result<()> {
     cmd.arg("/dlib").arg(opts.dlib);
     if let Some(m) = opts.metadata {
         cmd.arg("/dmdf").arg(m);
-    }
-    if opts.append {
-        cmd.arg("/as");
     }
     if let Some(d) = opts.description {
         cmd.args(["/d", d]);

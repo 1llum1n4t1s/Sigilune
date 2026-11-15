@@ -17,9 +17,9 @@
 
 pub mod cert;
 pub mod credential;
-pub mod dpapi;
+mod dpapi;
 pub mod manifest;
-pub mod paths;
+mod paths;
 pub mod session;
 pub mod signer;
 pub mod signtool;
