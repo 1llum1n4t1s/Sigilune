@@ -62,7 +62,9 @@ signtool はマニフェストの XML 署名を作れないため、MSBuild の 
 - 同梱の中間証明書は署名者の発行者と一致したものだけをチェーン用ストアへ追加する。
 - `ssign-core` は完全一致（`=0.1.8`）で固定する。上げるときは本番アカウントで exe と MSIX の署名・検証をやり直す。
 - テスト用ローカル鍵バックエンドは dlib のメタデータ（`/dmdf`）で `local_key_pem` と `local_cert` を両方指定したときだけ使われる。
-- リリース（`release.yml`）は `v1.2.3` 形式のタグの push でだけ起動する。利用者向けのメジャー版タグ（`v1`）は付け替えるため、`v*` では本番署名と公開が意図せず走る。タグとクレートの版が違えば止める。署名用 Secrets は Environment `release`（main と `v*` タグだけ許可）にだけ置く。
+- タグと GitHub Release は使わない。リリース（`release.yml`）は `release/<version>` ブランチの push（と、同じブランチでの手動再実行）でだけ起動する。ブランチ名とクレートの版が違えば止める。署名・配信用 Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`・`CLOUDFLARE_API_TOKEN`）は Environment `release`（`release/*` ブランチだけ許可）にだけ置く。
+- 配布は Cloudflare R2（バケット `sigilune-updates`、公開 `https://sigilune.kagayoi.com`）が唯一の入口。置き場は `<ver>/sigilune-<ver>-win-x64.zip` と `.sha256`（版付き・不変）、固定名フィード `latest.json`（`{"version","zip","sha256"}`。zip と sha256 は公開 URL からの相対キー）。`scripts/Publish-R2.ps1` が、版付きファイル → 公開 URL での照合 → `latest.json` の順に置き、固定名だけ purge する。同じ版が既にあって内容が違えば上書きせず失敗（同一なら成功で再実行できる）、R2 の `latest.json` が今回より新しい版なら更新しない（後退防止）。転送の実装は Edictora と同じ `R2Transfer.Core.cs` / `R2Distribution.Common.ps1` の同梱コピー。
+- `install.ps1` は R2 から取る（`-Version` 指定なら版付きの zip と `.sha256`、未指定なら `latest.json`）。https 限定（テスト用のループバックだけ http 可）、リダイレクトは辿らず、`.sha256` と署名者（CN）の照合は維持する。`action.yml` は `$GITHUB_ACTION_PATH` の `Cargo.toml` の版を入れる（`inputs.version` 優先）ため、`uses: …@<SHA>` がそのまま版固定になる。`github.action_ref` は使わない。
 
 ## 検証済みの事実（2026-11-13）
 
