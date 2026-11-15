@@ -140,9 +140,7 @@ fn load_stored() -> Result<Option<StoredCredential>> {
             bail!("CredReadW failed (0x{err:08X})");
         }
         let c = &*p;
-        let blob = std::slice::from_raw_parts_mut(c.CredentialBlob, c.CredentialBlobSize as usize);
-        let otpauth = Zeroizing::new(String::from_utf8_lossy(blob).into_owned());
-        blob.fill(0);
+        let otpauth = take_secret(c.CredentialBlob, c.CredentialBlobSize);
         let email = from_wide_ptr(c.UserName);
         CredFree(p as _);
         Ok(Some(StoredCredential {
@@ -151,6 +149,25 @@ fn load_stored() -> Result<Option<StoredCredential>> {
             from_env: false,
         }))
     }
+}
+
+/// 資格情報の Blob を文字列として取り出し、元のバッファを 0 で消す。
+///
+/// 他のツールで作られた同名の資格情報は Blob が空（ポインタが null）のことがある。null から
+/// スライスを作ると長さ 0 でも未定義動作になるため、その場合は空文字を返す
+/// （呼出し側の TOTP 解釈で「登録が不正」として扱われる）。
+///
+/// # Safety
+/// `ptr` は null か、`len` バイトの書込み可能な領域を指すこと。
+unsafe fn take_secret(ptr: *mut u8, len: u32) -> Zeroizing<String> {
+    if ptr.is_null() || len == 0 {
+        return Zeroizing::new(String::new());
+    }
+    // SAFETY: 呼出し元が領域の有効性を保証する。
+    let blob = unsafe { std::slice::from_raw_parts_mut(ptr, len as usize) };
+    let secret = Zeroizing::new(String::from_utf8_lossy(blob).into_owned());
+    blob.fill(0);
+    secret
 }
 
 /// 削除。未登録なら `Ok(false)`。
@@ -195,6 +212,16 @@ mod tests {
             .unwrap();
         assert_eq!(c.email, "dev@example.com");
         assert!(c.from_env);
+    }
+
+    #[test]
+    fn secret_blob_is_copied_then_wiped_and_null_is_empty() {
+        let mut buf = *b"otpauth://x";
+        let s = unsafe { take_secret(buf.as_mut_ptr(), buf.len() as u32) };
+        assert_eq!(s.as_str(), "otpauth://x");
+        assert!(buf.iter().all(|&b| b == 0));
+        assert!(unsafe { take_secret(null_mut(), 0) }.is_empty());
+        assert!(unsafe { take_secret(null_mut(), 16) }.is_empty());
     }
 
     #[test]

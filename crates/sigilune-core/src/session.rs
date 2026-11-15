@@ -29,6 +29,13 @@ const TOTP_PERIOD: u64 = 30;
 const MIN_WINDOW_LEFT_SECS: u64 = 5;
 /// ログイン排他の待機上限。
 const LOCK_TIMEOUT: Duration = Duration::from_secs(180);
+/// 未使用の時間枠を待つ上限。通常は次の枠まで（最大30秒）で、時計が数秒戻った場合（記録が1枠先）でも
+/// 60秒以内に収まる。これを超えるのは、記録した枠がさらに先にある（PC の時計が大きく戻された、または
+/// state.json が壊れた）場合で、ロックを持ったまま待ち続けないよう失敗にする。通常の通信時間なら、
+/// この待ちとログインを合わせても LOCK_TIMEOUT に収まり、待っている他のプロセスが先に諦めない。
+const MAX_WINDOW_WAIT_SECS: u64 = 60;
+/// 記録した枠がこれ以上先なら、時計のずれではなく state.json の破損とみなす。
+const DAMAGED_STATE_SECS: u64 = 24 * 60 * 60;
 
 /// ログインを許すかどうか。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -142,7 +149,7 @@ impl Session {
 /// セッションを取得する。
 pub fn acquire(policy: LoginPolicy) -> Result<Session> {
     let _lock = NamedMutex::acquire(
-        &format!("Local\\Sigilune.Session.{}", paths::instance_tag()),
+        &format!("Local\\Sigilune.Session.{}", paths::instance_tag()?),
         LOCK_TIMEOUT,
     )?;
     let cred = credential::load()?;
@@ -234,17 +241,53 @@ fn wait_for_fresh_totp_window() -> Result<u64> {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
     loop {
-        let t = now();
-        let step = t / TOTP_PERIOD;
-        let left = TOTP_PERIOD - t % TOTP_PERIOD;
-        if step > state.last_otp_step && left >= MIN_WINDOW_LEFT_SECS {
-            // 送信前に記録し、失敗した試行のコードも再利用しない。
-            state.last_otp_step = step;
-            write_atomic(&state_path, &serde_json::to_vec(&state)?)?;
-            return Ok(step);
+        match next_window(now(), state.last_otp_step) {
+            Window::Use(step) => {
+                // 送信前に記録し、失敗した試行のコードも再利用しない。
+                state.last_otp_step = step;
+                write_atomic(&state_path, &serde_json::to_vec(&state)?)?;
+                return Ok(step);
+            }
+            Window::Wait(secs) if secs <= MAX_WINDOW_WAIT_SECS => {
+                std::thread::sleep(Duration::from_secs(secs) + Duration::from_millis(200));
+            }
+            // 記録を書き換えて先へ進むと、使用済みの枠を再び使うおそれがあるため、待たずに止める。
+            // 削除を勧めるのは記録が明らかに壊れている場合だけにする（時計のずれなら、記録の枠が
+            // 実時刻で過ぎるまで待てば再利用にならない）。
+            Window::Wait(secs) if secs >= DAMAGED_STATE_SECS => bail!(
+                "the TOTP window recorded in {} is far ahead of the PC clock, so the file looks \
+                 damaged; check the clock, then delete that file and retry",
+                state_path.display()
+            ),
+            Window::Wait(secs) => bail!(
+                "the TOTP window last used for login ({}) is about {} min ahead of the PC clock \
+                 (the clock may have been set back); correct the clock, or if it is right, retry \
+                 after that time",
+                state_path.display(),
+                secs.div_ceil(60)
+            ),
         }
-        std::thread::sleep(Duration::from_secs(left) + Duration::from_millis(200));
     }
+}
+
+/// 時刻 `t` に使う TOTP の時間枠の判定。
+#[derive(Debug, PartialEq, Eq)]
+enum Window {
+    /// この枠のコードを使う。
+    Use(u64),
+    /// 未使用で残り時間が十分な枠が始まるまで、この秒数待つ。
+    Wait(u64),
+}
+
+/// `last` は最後にログインへ使った枠。それより後で、残りが MIN_WINDOW_LEFT_SECS 以上の枠だけを使う。
+fn next_window(t: u64, last: u64) -> Window {
+    let step = t / TOTP_PERIOD;
+    if step > last && TOTP_PERIOD - t % TOTP_PERIOD >= MIN_WINDOW_LEFT_SECS {
+        return Window::Use(step);
+    }
+    // 次の候補は「今の次の枠」か「記録した枠の次」の遅い方。壊れた記録でも溢れないよう飽和演算にする。
+    let next = (step + 1).max(last.saturating_add(1));
+    Window::Wait(next.saturating_mul(TOTP_PERIOD).saturating_sub(t))
 }
 
 /// 一時ファイルへ書いてから置き換える。
@@ -285,5 +328,31 @@ impl Drop for NamedMutex {
             ReleaseMutex(self.0);
             CloseHandle(self.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn totp_window_is_never_reused_and_waits_are_bounded() {
+        let p = TOTP_PERIOD;
+        // 未使用で残りが十分な枠は使う。
+        assert_eq!(next_window(100 * p + 3, 99), Window::Use(100));
+        // 残りが5秒未満なら次の枠まで待つ。
+        assert_eq!(next_window(100 * p + 26, 99), Window::Wait(4));
+        // 同じ枠は使わず、次の枠まで待つ。
+        assert_eq!(next_window(100 * p + 10, 100), Window::Wait(20));
+        // 時計が少し戻った（記録が1枠先）なら、記録の次の枠まで待つ（上限内）。
+        assert_eq!(next_window(100 * p + 10, 101), Window::Wait(50));
+        const { assert!(50 <= MAX_WINDOW_WAIT_SECS) };
+        // 2枠以上先は上限を超え、呼出し側で失敗にする。
+        assert_eq!(next_window(100 * p + 10, 102), Window::Wait(80));
+        const { assert!(80 > MAX_WINDOW_WAIT_SECS) };
+        // 壊れた記録でも溢れず、破損とみなす長さになる。
+        assert!(
+            matches!(next_window(100 * p, u64::MAX), Window::Wait(s) if s >= DAMAGED_STATE_SECS)
+        );
     }
 }
