@@ -43,3 +43,6 @@ jobs:
       - name: Test manifest signing
         # 使い捨ての自己署名鍵で mage.exe と出力を突き合わせる（Certum には接続しない）。
         run: ./tests/Test-ManifestSigning.ps1 -Tool "$env:RUNNER_TEMP/manifest-tool/sigilune-manifest.exe" -WorkDirectory "$env:RUNNER_TEMP/manifest-test"
+      - name: Test installer and R2 publish checks
+        # install.ps1（R2 からの取得・SHA-256 照合）と Publish-R2.ps1 の入力検査を、ローカルのモック HTTP で確かめる（R2 には接続しない）。
+        run: ./tests/Test-Install.ps1 -WorkDirectory "$env:RUNNER_TEMP/install-test"

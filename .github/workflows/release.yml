@@ -1,13 +1,16 @@
 name: Release
 
 # 配布用 zip（sigilune.exe / sigilune_dlib.dll / sigilune-manifest.exe）を作り、Sigilune 自身で Certum のクラウド鍵により署名する。
-# - v* タグの push: 署名済み zip と SHA256 を GitHub Release として公開する。
-# - 手動実行: 署名済み zip を Actions の成果物として残すだけ（公開しない）。
-# 署名用の Secrets は Environment "release"（main と v* タグだけ許可、承認者なし）にだけ置く。
+# タグも GitHub Release も使わない。配布は Cloudflare R2（https://sigilune.kagayoi.com）が唯一の入口。
+# - release/<version> ブランチの push: 署名済み zip と SHA256 を R2 へ配信し、latest.json を更新する。
+# - 手動実行（workflow_dispatch）: 同じ release/<version> ブランチを指定して配信をやり直す（R2 に同じ版が
+#   あれば内容が同一のときだけ成功。内容が違えば上書きせず失敗する）。
+# 署名・配信用の Secrets（SIGILUNE_EMAIL / SIGILUNE_TOTP_URI / CLOUDFLARE_API_TOKEN）は
+# Environment "release"（release/* ブランチだけ許可、承認者なし）にだけ置く。
 on:
   push:
-    # v1.2.3 形式だけ。メジャー版タグ（v1）の付け替えでは起動しない。
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    # GitHub のブランチフィルタは glob（正規表現ではない）。release/1.1.3 のような名前に一致する。
+    branches: ['release/**']
   workflow_dispatch:
 
 permissions:
@@ -22,8 +25,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     environment: release
+    # R2 へは Cloudflare のトークンで書くため、GitHub の書込み権限は要らない。
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         shell: pwsh
@@ -39,9 +43,9 @@ jobs:
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
             Where-Object name -eq 'sigilune' | Select-Object -ExpandProperty version
           if (-not $version) { throw 'could not read the sigilune version' }
-          # タグ公開ではタグとクレートの版が一致しなければ止める。
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
-            throw "tag $env:GITHUB_REF_NAME does not match version v$version"
+          # ブランチ名 release/<版> とクレートの版が一致しなければ止める（別の版を誤って配信しない）。
+          if ($env:GITHUB_REF_TYPE -ne 'branch' -or $env:GITHUB_REF_NAME -cne "release/$version") {
+            throw "ref $env:GITHUB_REF_NAME does not match release/$version"
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
@@ -110,8 +114,8 @@ jobs:
           "zip=$zip" >> $env:GITHUB_OUTPUT
 
       - name: Verify package
-        # 公開する zip そのものを展開し、版・同梱ファイル・署名（有効・署名者・タイムスタンプ）を照合する。
-        # ここで失敗すれば成果物の保存も GitHub Release の作成も行わない。
+        # 配信する zip そのものを展開し、版・同梱ファイル・署名（有効・署名者・タイムスタンプ）を照合する。
+        # ここで失敗すれば成果物の保存も R2 への配信も行わない。
         run: |
           $zip = '${{ steps.package.outputs.zip }}'
           $check = Join-Path $env:RUNNER_TEMP 'verify'
@@ -134,37 +138,12 @@ jobs:
             ${{ steps.package.outputs.zip }}.sha256
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
+      - name: Publish to R2
+        # 版付きの不変ファイルを先に置き、公開 URL で照合してから latest.json を更新する（詳細は scripts/Publish-R2.ps1）。
+        # 同じ版が R2 にあれば、内容が同一のときだけ成功する（別内容は上書きせず失敗）。
+        # R2 の latest.json がより新しい版なら latest.json は更新しない。
         env:
-          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          $zip = '${{ steps.package.outputs.zip }}'
-          $version = '${{ steps.version.outputs.version }}'
-          # リリースノートは CHANGELOG.md の該当版の節を正本として使う。
-          $lines = Get-Content -LiteralPath CHANGELOG.md -Encoding utf8
-          $start = [Array]::FindIndex($lines, [Predicate[string]] { param($l) $l -match "^## $([regex]::Escape($version))( |$)" })
-          if ($start -lt 0) { throw "CHANGELOG.md has no section for $version" }
-          $end = [Array]::FindIndex($lines, $start + 1, [Predicate[string]] { param($l) $l -match '^## ' })
-          if ($end -lt 0) { $end = $lines.Count }
-          $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
-          ($lines[($start + 1)..($end - 1)] -join "`n").Trim() | Set-Content -LiteralPath $notes -Encoding utf8
-          gh release create $env:GITHUB_REF_NAME $zip "$zip.sha256" --repo $env:GITHUB_REPOSITORY --title "Sigilune $env:GITHUB_REF_NAME" --notes-file $notes
-          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
-
-      - name: Move major tag
-        if: github.ref_type == 'tag'
-        # `uses: 1llum1n4t1s/Sigilune@v1` の利用者が新しい 1.x を自動で使えるよう、メジャー版タグを今回のコミットへ動かす。
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $major = 'v' + ('${{ steps.version.outputs.version }}' -split '\.')[0]
-          # 単数形 git/ref は完全一致だけを返す（複数形 git/refs は v1.0.0 などの前方一致を配列で返してしまう）。
-          gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$major" --silent 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$major" -f sha=$env:GITHUB_SHA -F force=true --silent
-          } else {
-            gh api -X POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$major" -f sha=$env:GITHUB_SHA --silent
-          }
-          if ($LASTEXITCODE -ne 0) { throw "failed to move $major" }
-          Write-Host "$major -> $env:GITHUB_SHA"
+          ./scripts/Publish-R2.ps1 -Version '${{ steps.version.outputs.version }}' -ZipPath '${{ steps.package.outputs.zip }}'
+          if ($LASTEXITCODE -ne 0) { throw 'publishing to R2 failed' }
