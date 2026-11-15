@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+## 1.1.3 - 2026-11-16
+
+### 変更
+
+- 配布を GitHub Release から Cloudflare R2（`https://sigilune.kagayoi.com`）へ移した。タグと GitHub Release は使わず、`release/<version>` ブランチの push で署名・配信する。`install.ps1` は R2 の `latest.json`（または `-Version` 指定の版付き zip と `.sha256`）から取り、SHA-256 と署名者の照合は従来どおり行う。`-BaseUrl` を追加。
+- 同梱の `action.yml` は、`uses: …@<コミット SHA>` で参照したチェックアウトの `Cargo.toml` の版を入れるようにした（SHA 固定がそのまま版固定になる）。`github.action_ref` による「最新を入れる」判定は廃止。`inputs.version` の指定は従来どおり優先する。
+- 移動タグ `v1` の付け替えを廃止した。利用側は `@v1` ではなくコミット SHA で参照する。
+
 ## 1.1.2 - 2026-11-15
 
 ### 修正
