@@ -46,16 +46,16 @@ signtool はマニフェストの XML 署名を作れないため、MSBuild の 
 
 ## セッションと秘密情報
 
-- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの Environment `release`（ブランチ制限あり・承認者なし。`/vava` を離席中も完走させるため）の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
+- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI（Blob が空の資格情報は登録不正として扱う）。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの Environment `release`（ブランチ制限あり・承認者なし。`/vava` を離席中も完走させるため）の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
 - **セッションキャッシュ**：`%LOCALAPPDATA%\Sigilune\session.bin`（`SIGILUNE_HOME` で変更）。中身はトークン・カード番号・証明書 PEM の JSON を DPAPI（現在のユーザー、追加エントロピー `Sigilune.Session.v1`）で保護したもの。有効期間はログインから20分とし、残り120秒未満は使わない。
 - **補助状態**：同フォルダーの `state.json` に、最後にログインへ使った TOTP の時間枠（`last_otp_step`）だけを保存する。秘密は含まない。
 - **パッケージアプリ配下での注意**：MSIX パッケージのアプリ（例：Claude デスクトップ）から起動したプロセスでは `%LOCALAPPDATA%` への新規書込みが `Packages\<pkg>\LocalCache\Local` へ振り替えられ、通常の端末とキャッシュ・`state.json` が別になる。その場合は余分なログインが起こり得て、TOTP 時間枠の記録も別々になる（同じ枠を二重に使うとログインが拒否されるだけで、自動再試行はしない）。共有したいときは `SIGILUNE_HOME` で同じ実フォルダーを指定する。資格情報マネージャーは振替えの対象外で共通。
-- **排他**：`Local\Sigilune.Session.<tag>` の名前付きミューテックスでキャッシュ確認からログイン・保存までを直列化する（`<tag>` は `SIGILUNE_HOME` ごとに分ける）。並列に起動された署名プロセスはログイン1回を共有する。
+- **排他**：`Local\Sigilune.Session.<tag>` の名前付きミューテックスでキャッシュ確認からログイン・保存までを直列化する（`<tag>` は状態フォルダーの実体パスから決める。書き方の違い〔末尾の `\`・大文字小文字・`..`・ジャンクション〕や既定フォルダーの明示指定でも同じ排他になり、既定は旧版と同じ `default`）。並列に起動された署名プロセスはログイン1回を共有する。待機の上限は180秒。
 
 ## 不変条件
 
 - 秘密値（otpauth URI・TOTP コード・トークン）を引数・標準出力・ログに出さない。`setup` は URI を非表示入力・標準入力・JSON ファイルからだけ受け取る。
-- 同じ TOTP の時間枠を二度ログインに使わない。枠は送信前に記録し、残り5秒未満の枠は使わない。
+- 同じ TOTP の時間枠を二度ログインに使わない。枠は送信前に記録し、残り5秒未満の枠は使わない。記録の枠が先にあって60秒を超えて待つ場合（PC の時計が戻された、または `state.json` の破損）は、記録を書き換えずロックを持ったまま待ち続けることもせず、理由を示して失敗する。
 - ログイン失敗時に自動再試行しない（アカウントロック・不正検知を避ける）。
 - dlib は SHA-256 の32バイトダイジェスト以外を `NTE_BAD_ALGID` で拒否する。パニックを FFI 境界の外へ出さず `E_FAIL` にする。
 - dlib の出力メモリは `HeapAlloc(GetProcessHeap())`、証明書は所有権を移した `CERT_CONTEXT`（呼出し元が解放）。
