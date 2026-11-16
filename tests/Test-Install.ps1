@@ -142,3 +142,5 @@ try {
 
 if ($failures.Count -gt 0) { throw "$($failures.Count) check(s) failed: $($failures -join '; ')" }
 Write-Host 'All install / publish checks passed.' -ForegroundColor Green
+# 失敗系の検査で呼んだ子プロセスの非0終了コードが $LASTEXITCODE に残り、pwsh -File / CI の step を失敗扱いにするため、成功時は明示的に 0 で終える（失敗は上で throw 済み）。
+exit 0
