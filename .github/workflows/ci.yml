@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Rust 検証（fmt / clippy / test）。manifest ジョブと並列に走らせて待ち時間を縮める。
   test:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -28,12 +29,30 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Cache Rust build
+        # 保存は main だけ（PR は復元のみ）。キャッシュ容量と汚染を抑える。
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+
+  # ClickOnce / VSTO マニフェスト署名の補助ツール（dotnet）と install.ps1 / R2 検査。Rust には依存しない。
+  manifest:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
