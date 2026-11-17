@@ -78,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # ... build ...
-      - uses: 1llum1n4t1s/Sigilune@<full commit SHA>   # 1.1.3
+      - uses: 1llum1n4t1s/Sigilune@<full commit SHA>   # 1.1.4
       - run: sigilune sign dist\MyApp.exe dist\MyApp.msix
         env:
           SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}

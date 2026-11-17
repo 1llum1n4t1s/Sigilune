@@ -6,7 +6,7 @@ branding:
   color: purple
 
 # 使い方（ワークフロー側）:
-#   - uses: 1llum1n4t1s/Sigilune@<完全なコミット SHA> # 1.1.3
+#   - uses: 1llum1n4t1s/Sigilune@<完全なコミット SHA> # 1.1.4
 #   - run: sigilune sign dist\MyApp.exe
 #     env:
 #       SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
