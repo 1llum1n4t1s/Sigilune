@@ -13,6 +13,10 @@ install.ps1（R2 からの取得）と scripts/Publish-R2.ps1（入力検査）�
   - latest.json が想定外のパスを指していれば失敗
   - 非ループバックの http は拒否
   - Publish-R2.ps1 -ValidateOnly: 正常系と、.sha256 不一致・zip 名違いの失敗
+  - ユーザー PATH の合成（Get-UserPathUpdate）: %VAR% を展開せずに保持・値種別の保持・重複判定・非文字列値の拒否
+  - 本体が展開してしまう旧方式（[Environment]::Get/SetEnvironmentVariable の 'User'）へ戻っていないこと（静的検査）
+  - install.ps1 が ASCII のみであること（Windows PowerShell 5.1 は BOM なし UTF-8 を CP932 で読むため）と、5.1 の -File 経路
+実レジストリ・実 PATH には触れない（install.ps1 の起動はすべて -NoPath、PATH 合成は AST から取り出した関数だけを実行する）。
 #>
 [CmdletBinding()]
 param(
@@ -89,6 +93,77 @@ try {
     $routes['/9.9.9/sigilune-9.9.9-win-x64.zip'] = $zipBytes
     $routes['/9.9.9/sigilune-9.9.9-win-x64.zip.sha256'] = $sumBytes
     Set-Feed '9.9.9/sigilune-9.9.9-win-x64.zip' '9.9.9/sigilune-9.9.9-win-x64.zip.sha256'
+
+    # --- ユーザー PATH の合成（純関数。実レジストリ・実 PATH には触れない） ---
+    # install.ps1 から Get-UserPathUpdate の定義だけを AST で取り出して実行する（スクリプト本体は走らせない）。
+    Write-Host 'ユーザー PATH の合成（展開・種別保持・重複判定・空値・非文字列値）'
+    $psTokens = $null; $psErrors = $null
+    $psAst = [Management.Automation.Language.Parser]::ParseFile($install, [ref]$psTokens, [ref]$psErrors)
+    Assert-That (@($psErrors).Count -eq 0) 'install.ps1 は構文として解釈できる'
+    $pathFnAst = $psAst.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-UserPathUpdate' }, $true) | Select-Object -First 1
+    Assert-That ($null -ne $pathFnAst) 'install.ps1 に Get-UserPathUpdate がある'
+    # 本体が非展開で読む新方式を使い続けていることを静的に確かめる（レジストリには触れない）。
+    # [Environment]::Get/SetEnvironmentVariable の 'User' は REG_EXPAND_SZ を展開して REG_SZ で書き戻すため使わない。
+    $envApiCalls = $psAst.FindAll({ param($n) $n -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member.Extent.Text -in @('GetEnvironmentVariable', 'SetEnvironmentVariable') }, $true)
+    Assert-That (@($envApiCalls).Count -eq 0) 'install.ps1 は [Environment]::Get/SetEnvironmentVariable でユーザー PATH を読み書きしない'
+    $addCalls = $psAst.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-ToUserPath' }, $true)
+    Assert-That (@($addCalls).Count -ge 1) 'install.ps1 の本体が Add-ToUserPath で PATH を更新する'
+    $pathFnText = $pathFnAst.Extent.Text
+    . ([scriptblock]::Create($pathFnText))
+    $kExpand = [Microsoft.Win32.RegistryValueKind]::ExpandString
+    $kString = [Microsoft.Win32.RegistryValueKind]::String
+    $savedTestBin = $env:SIGILUNE_TEST_BIN
+    $env:SIGILUNE_TEST_BIN = 'C:\SigiluneTest\bin'
+    try {
+        $u = Get-UserPathUpdate $true '%SIGILUNE_TEST_BIN%;C:\Tools' $kExpand 'C:\New\Sigilune'
+        Assert-That ($u.Value -ceq '%SIGILUNE_TEST_BIN%;C:\Tools;C:\New\Sigilune') '既存の項目は展開せずそのまま残して末尾へ追加する'
+        Assert-That ($u.Kind -eq $kExpand) '元の値種別（REG_EXPAND_SZ）を保つ'
+        $u = Get-UserPathUpdate $true 'C:\Tools' $kString 'C:\New\Sigilune'
+        Assert-That ($u.Kind -eq $kString -and $u.Value -ceq 'C:\Tools;C:\New\Sigilune') '元が REG_SZ なら REG_SZ のまま書き戻す'
+        $u = Get-UserPathUpdate $false '' $null 'C:\New\Sigilune'
+        Assert-That ($u.Value -ceq 'C:\New\Sigilune' -and $u.Kind -eq $kExpand) '値が無ければ REG_EXPAND_SZ で新規に作る'
+        $u = Get-UserPathUpdate $true 'C:\A;' $kExpand 'C:\New\Sigilune'
+        Assert-That ($u.Value -ceq 'C:\A;C:\New\Sigilune') '末尾の区切りは重ねない'
+        $u = Get-UserPathUpdate $true '' $kExpand 'C:\New\Sigilune'
+        Assert-That ($u.Value -ceq 'C:\New\Sigilune') '空の値には項目だけを入れる'
+        Assert-That ($null -eq (Get-UserPathUpdate $true 'C:\Tools;C:\New\Sigilune\' $kExpand 'c:\new\SIGILUNE')) '末尾の \ と大文字小文字の違いは重複とみなす'
+        Assert-That ($null -eq (Get-UserPathUpdate $true '%SIGILUNE_TEST_BIN%;C:\Tools' $kExpand 'c:\sigiluneTEST\BIN\')) '環境変数を展開した結果が同じなら重複とみなす（追加しない）'
+        Assert-That ($null -eq (Get-UserPathUpdate $true 'C:\Tools;C:\SigiluneTest\bin' $kExpand '%SIGILUNE_TEST_BIN%')) '追加する側が環境変数参照でも展開して比べる'
+        $threw = $false
+        try { Get-UserPathUpdate $true 'C:\Tools' ([Microsoft.Win32.RegistryValueKind]::DWord) 'C:\New' | Out-Null } catch { $threw = $true }
+        Assert-That $threw '文字列型でない Path の値は壊さずに止まる'
+    } finally {
+        if ($null -eq $savedTestBin) { Remove-Item Env:SIGILUNE_TEST_BIN -ErrorAction SilentlyContinue } else { $env:SIGILUNE_TEST_BIN = $savedTestBin }
+    }
+    # Windows PowerShell 5.1 でも同じ結果になること（導入先は 5.1 のことが多い）。
+    $ps51 = Get-Command powershell.exe -ErrorAction SilentlyContinue
+    if ($ps51) {
+        $ps51Script = Join-Path $WorkDirectory 'ps51-path.ps1'
+        $ps51Body = @(
+            '$env:SIGILUNE_TEST_BIN = ''C:\SigiluneTest\bin''',
+            $pathFnText,
+            '$u = Get-UserPathUpdate $true ''%SIGILUNE_TEST_BIN%;C:\Tools'' ([Microsoft.Win32.RegistryValueKind]::ExpandString) ''C:\New\Sigilune''',
+            'Write-Output ("add=" + $u.Value + "|" + $u.Kind)',
+            '$d = Get-UserPathUpdate $true ''%SIGILUNE_TEST_BIN%;C:\Tools'' ([Microsoft.Win32.RegistryValueKind]::ExpandString) ''c:\sigiluneTEST\BIN\''',
+            'Write-Output ("dup=" + ($null -eq $d))'
+        ) -join "`n"
+        [IO.File]::WriteAllText($ps51Script, $ps51Body, [Text.UTF8Encoding]::new($false))
+        $out = & $ps51.Source -NoProfile -ExecutionPolicy Bypass -File $ps51Script 2>&1 | Out-String
+        Assert-That ($out -match 'add=%SIGILUNE_TEST_BIN%;C:\\Tools;C:\\New\\Sigilune\|ExpandString' -and $out -match 'dup=True') 'powershell.exe 5.1 でも同じ結果になる'
+    }
+
+    # install.ps1 は保存して 5.1 で実行され得る（README の保存実行）ため ASCII だけにしてある（BOM なし UTF-8 の日本語は CP932 として読まれ、改行を巻き込む）。
+    Write-Host 'install.ps1 は ASCII のみ・powershell.exe 5.1 -File でも動く'
+    $nonAscii = @([IO.File]::ReadAllBytes($install) | Where-Object { $_ -gt 127 }).Count
+    Assert-That ($nonAscii -eq 0) 'install.ps1 は ASCII だけで書かれている'
+    if ($ps51) {
+        $requests.Clear()
+        $target = Join-Path $WorkDirectory 'install-ps51'
+        $out = & $ps51.Source -NoProfile -ExecutionPolicy Bypass -File $install -BaseUrl $prefix -InstallDir $target -NoPath 2>&1 | Out-String
+        Assert-That ($LASTEXITCODE -ne 0 -and $out -match 'Checksum OK' -and $out -match 'Untrusted signature') 'powershell.exe 5.1 -File でも取得・照合を通り、署名の検査で止まる'
+    } else {
+        Write-Host '  skip powershell.exe が無いため 5.1 の検査は省略'
+    }
 
     Write-Host 'latest.json 解決（署名の検査まで進んで止まる）'
     $r = Invoke-Install @()

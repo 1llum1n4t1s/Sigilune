@@ -16,6 +16,9 @@ Layout of the download site:
 
 Works in Windows PowerShell 5.1 and PowerShell 7.
 
+NOTE: this file is deliberately ASCII-only (comments and strings in English). It can be saved to disk and run by
+Windows PowerShell 5.1, which reads a BOM-less file as the ANSI code page; non-ASCII text can swallow line breaks.
+
 .PARAMETER Version
 Release to install, e.g. 1.0.0. Default: the newest release (read from latest.json).
 
@@ -45,11 +48,11 @@ param(
     [switch]$KeepDownload
 )
 
-# 配布バイナリの署名者（Certum のコード署名証明書の CN）。証明書の更新で拇印が変わっても CN で照合する。
-# 配布元は GitHub Release ではなく R2（-BaseUrl）。ここが配信の唯一の入口になる。
+# Expected signer: the CN of the Certum code-signing certificate. Matched by CN so that a certificate renewal
+# (new thumbprint) does not break installs. Downloads come only from R2 (-BaseUrl), not from GitHub Releases.
 $ExpectedSigner = 'Open Source Developer Yuichiro Shinozaki'
 $Binaries = @('sigilune.exe', 'sigilune_dlib.dll')
-# 1.1.0 で追加した ClickOnce / VSTO マニフェスト署名の補助ツール。古い版の zip には無いので、あるときだけ検証して入れる。
+# Helper for ClickOnce / VSTO manifest signing, added in 1.1.0. Older zips do not contain it, so it is verified and installed only when present.
 $OptionalBinaries = @('sigilune-manifest.exe')
 $OptionalFiles = @('sigilune-manifest.exe.config')
 
@@ -58,12 +61,72 @@ Set-StrictMode -Version 2
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 
+# --- User PATH helpers ---------------------------------------------------------------------------------------
+# The user PATH lives in HKCU\Environment\Path. It is usually REG_EXPAND_SZ and may contain %VAR% references,
+# so it is read WITHOUT expanding, written back with its original value kind, and compared entry by entry
+# after expanding. [Environment]::GetEnvironmentVariable/SetEnvironmentVariable would flatten the value to an
+# expanded REG_SZ string. Get-UserPathUpdate is pure (no registry access); tests load it from this file.
+
+# Returns $null when $Dir is already on the path, else the new raw value and the registry value kind to use.
+function Get-UserPathUpdate([bool]$Exists, [string]$Raw, $Kind, [string]$Dir) {
+    $string = [Microsoft.Win32.RegistryValueKind]::String
+    $expand = [Microsoft.Win32.RegistryValueKind]::ExpandString
+    if ($Exists -and $Kind -ne $string -and $Kind -ne $expand) { throw "The user Path has an unexpected registry value type ($Kind)." }
+    $want = [Environment]::ExpandEnvironmentVariables($Dir).Trim().TrimEnd('\')
+    foreach ($entry in @($Raw -split ';')) {
+        if ($entry -and [Environment]::ExpandEnvironmentVariables($entry).Trim().TrimEnd('\') -ieq $want) { return $null }
+    }
+    # Existing entries are kept verbatim (unexpanded); only a trailing separator is dropped before appending.
+    $value = if ($Raw) { $Raw.TrimEnd(';') + ';' + $Dir } else { $Dir }
+    # A missing value is created as REG_EXPAND_SZ, the kind Windows itself uses for the user Path.
+    $newKind = if ($Exists) { $Kind } else { $expand }
+    return [pscustomobject]@{ Value = $value; Kind = $newKind }
+}
+
+# Tells running programs (Explorer, new terminals) that the environment changed, as SetEnvironmentVariable did.
+function Send-EnvironmentChange {
+    try {
+        if (-not ('SigiluneInstall.NativeMethods' -as [type])) {
+            Add-Type -Namespace SigiluneInstall -Name NativeMethods -MemberDefinition (@(
+                '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]',
+                'public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+            ) -join "`n")
+        }
+        $result = [UIntPtr]::Zero
+        # HWND_BROADCAST, WM_SETTINGCHANGE, lParam "Environment", SMTO_ABORTIFHUNG, 5 second timeout.
+        [void][SigiluneInstall.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)
+    } catch {
+        Write-Warning "Could not notify running programs of the PATH change: $($_.Exception.Message)"
+    }
+}
+
+# Adds $Dir to the user PATH in the registry. Returns $true when it was added, $false when already present.
+function Add-ToUserPath([string]$Dir) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+        $exists = @($key.GetValueNames()) -contains 'Path'
+        $raw = ''
+        $kind = $null
+        if ($exists) {
+            $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $kind = $key.GetValueKind('Path')
+        }
+        $update = Get-UserPathUpdate $exists $raw $kind $Dir
+        if (-not $update) { return $false }
+        $key.SetValue('Path', $update.Value, $update.Kind)
+    } finally {
+        $key.Close()
+    }
+    Send-EnvironmentChange
+    return $true
+}
+
 if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Sigilune runs on Windows only.' }
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Sigilune requires 64-bit Windows.' }
 if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
     Write-Warning 'Only an x64 build is published. It runs under emulation on ARM64, but signtool must then be the x64 one.'
 }
-# Windows PowerShell 5.1 の既定は TLS 1.0 のことがあるため、TLS 1.2 を有効にする。
+# Windows PowerShell 5.1 may default to TLS 1.0, so enable TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $work = Join-Path ([IO.Path]::GetTempPath()) ('sigilune-install-' + [guid]::NewGuid().ToString('N'))
@@ -73,7 +136,7 @@ try {
         $zip = (Resolve-Path -LiteralPath $ZipPath).ProviderPath
         Write-Step "Using local package $zip"
     } else {
-        # 配布元は https 限定（テスト用にループバックだけ http を許す）。リダイレクトは辿らない。
+        # https only (plain http only for loopback, for tests). Redirects are never followed.
         $base = $BaseUrl.TrimEnd('/')
         $baseUri = [uri]$base
         if ($baseUri.Scheme -ne 'https' -and -not ($baseUri.Scheme -eq 'http' -and $baseUri.IsLoopback)) { throw "BaseUrl must be https: $BaseUrl" }
@@ -87,7 +150,8 @@ try {
             $latest = $feed | ConvertFrom-Json
             $want = [string]$latest.version
         }
-        # 版は x.y.z だけ。キーは版から組み立て、フィードの値は照合に使うだけにして、任意のパスへ飛ばされないようにする。
+        # The version must be x.y.z. The download keys are built from it; values in the feed are only compared
+        # against them, so the feed can never redirect the installer to an arbitrary path.
         if ($want -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid version '$want'." }
         $zipName = "sigilune-$want-win-x64.zip"
         $zipKey = "$want/$zipName"
@@ -127,11 +191,12 @@ try {
     Write-Step "Installed to $InstallDir"
 
     if (-not $NoPath) {
-        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-        $entries = @(if ($userPath) { $userPath -split ';' | Where-Object { $_ } })
-        if (-not ($entries | Where-Object { $_.TrimEnd('\') -ieq $InstallDir.TrimEnd('\') })) {
-            [Environment]::SetEnvironmentVariable('Path', (@($entries + $InstallDir) -join ';'), 'User')
-            Write-Step 'Added to the user PATH (open a new terminal to use it)'
+        # The files are already in place, so a PATH problem (for example a Path value of an unexpected registry
+        # type, which is left untouched) is only a warning: the install itself still succeeds.
+        try {
+            if (Add-ToUserPath $InstallDir) { Write-Step 'Added to the user PATH (open a new terminal to use it)' }
+        } catch {
+            Write-Warning "Installed, but the user PATH was not updated: $($_.Exception.Message) Add $InstallDir to PATH yourself."
         }
         if (-not (($env:Path -split ';') | Where-Object { $_.TrimEnd('\') -ieq $InstallDir.TrimEnd('\') })) { $env:Path = "$env:Path;$InstallDir" }
     }
