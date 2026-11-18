@@ -1,16 +1,17 @@
 name: Release
 
 # 配布用 zip（sigilune.exe / sigilune_dlib.dll / sigilune-manifest.exe）を作り、Sigilune 自身で Certum のクラウド鍵により署名する。
-# タグも GitHub Release も使わない。配布は Cloudflare R2（https://sigilune.kagayoi.com）が唯一の入口。
-# - release/<version> ブランチの push: 署名済み zip と SHA256 を R2 へ配信し、latest.json を更新する。
-# - 手動実行（workflow_dispatch）: 同じ release/<version> ブランチを指定して配信をやり直す（R2 に同じ版が
-#   あれば内容が同一のときだけ成功。内容が違えば上書きせず失敗する）。
+# GitHub Release は使わない。配布は Cloudflare R2（https://sigilune.kagayoi.com）が唯一の入口。
+# - main のコミットに付けた軽量タグ v<version> の push: 署名済み zip と SHA256 を R2 へ配信し、latest.json を更新する。
+# - 手動実行（workflow_dispatch）: 同じタグを指定して配信をやり直す（gh workflow run release.yml --ref v<version>）。
+#   R2 に同じ版があれば内容が同一のときだけ成功。内容が違えば上書きせず失敗する。
 # 署名・配信用の Secrets（SIGILUNE_EMAIL / SIGILUNE_TOTP_URI / CLOUDFLARE_API_TOKEN）は
-# Environment "release"（release/* ブランチだけ許可、承認者なし）にだけ置く。
+# Environment "release"（版タグ v*.*.* だけ許可、承認者なし）にだけ置く。
+# 移動タグ v1（action.yml の uses: …@v1）は、この workflow の配信が成功した commit へだけ動かす（この workflow は動かさない）。
 on:
   push:
-    # GitHub のブランチフィルタは glob（正規表現ではない）。release/1.1.3 のような名前に一致する。
-    branches: ['release/**']
+    # 版タグだけ。移動タグ v1 や v1.2.3-rc では起動しない（GitHub のタグフィルタは glob）。
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
 
 permissions:
@@ -21,7 +22,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  guard:
+    # Environment も Secrets も持たない。タグの形・軽量タグ・main の祖先・版の一致をここで確かめてから package へ進む。
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag ]] || { echo "::error::タグ以外では配信しない: $GITHUB_REF"; exit 1; }
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "::error::版タグの形ではない: $GITHUB_REF_NAME"; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          version="${GITHUB_REF_NAME#v}"
+          # 軽量タグで、いまもこの commit を指すこと。
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type+" "+.object.sha')" == "commit $GITHUB_SHA" ]] \
+            || { echo "::error::タグが $GITHUB_SHA を指す軽量タグではない"; exit 1; }
+          # 既定ブランチの祖先であること（depth=1 の checkout では判定できないので compare API を使う）。
+          default="$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          cmp="$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$default?per_page=1" --jq '.status+" "+(.behind_by|tostring)')"
+          [[ "$cmp" == "ahead 0" || "$cmp" == "identical 0" ]] || { echo "::error::$default の祖先ではない ($cmp)"; exit 1; }
+          # その commit の Cargo.toml（ワークスペースの版）とタグの版が一致すること。
+          file="$(gh api "repos/$GITHUB_REPOSITORY/contents/Cargo.toml?ref=$GITHUB_SHA" -H 'Accept: application/vnd.github.raw' | sed -n '/^\[workspace\.package\]/,/^\[[^w]/{s/^version *= *"\([^"]*\)".*/\1/p}' | head -1)"
+          [[ "$file" == "$version" ]] || { echo "::error::Cargo.toml の版 '$file' とタグの版 '$version' が違う"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   package:
+    needs: guard
     runs-on: windows-latest
     timeout-minutes: 40
     environment: release
@@ -43,9 +75,9 @@ jobs:
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
             Where-Object name -eq 'sigilune' | Select-Object -ExpandProperty version
           if (-not $version) { throw 'could not read the sigilune version' }
-          # ブランチ名 release/<版> とクレートの版が一致しなければ止める（別の版を誤って配信しない）。
-          if ($env:GITHUB_REF_TYPE -ne 'branch' -or $env:GITHUB_REF_NAME -cne "release/$version") {
-            throw "ref $env:GITHUB_REF_NAME does not match release/$version"
+          # タグ v<版> とクレートの版が一致しなければ止める（別の版を誤って配信しない）。guard の結果とも照合する。
+          if ($env:GITHUB_REF_TYPE -ne 'tag' -or $env:GITHUB_REF_NAME -cne "v$version" -or $version -cne '${{ needs.guard.outputs.version }}') {
+            throw "ref $env:GITHUB_REF_NAME does not match v$version"
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 

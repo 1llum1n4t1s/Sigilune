@@ -46,7 +46,7 @@ signtool はマニフェストの XML 署名を作れないため、MSBuild の 
 
 ## セッションと秘密情報
 
-- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI（Blob が空の資格情報は登録不正として扱う）。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの Environment `release`（ブランチ制限あり・承認者なし。`/vava` を離席中も完走させるため）の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
+- **登録情報**：資格情報マネージャーの汎用資格情報（既定名 `Sigilune/Certum SimplySign`、`SIGILUNE_CREDENTIAL` で変更）。UserName にメール、Blob に otpauth URI（Blob が空の資格情報は登録不正として扱う）。CI では `SIGILUNE_EMAIL` と `SIGILUNE_TOTP_URI` の環境変数を優先して使う（片方だけは設定ミスとして拒否）。GitHub Actions では各リポジトリの Environment `release`（タグ制限あり・承認者なし。`/vava` を離席中も完走させるため）の Secrets として渡す。複数ジョブが別マシンで同じ TOTP 時間枠を使うと後者が拒否されるため、署名は1ジョブにまとめるか直列化する。
 - **セッションキャッシュ**：`%LOCALAPPDATA%\Sigilune\session.bin`（`SIGILUNE_HOME` で変更）。中身はトークン・カード番号・証明書 PEM の JSON を DPAPI（現在のユーザー、追加エントロピー `Sigilune.Session.v1`）で保護したもの。有効期間はログインから20分とし、残り120秒未満は使わない。
 - **補助状態**：同フォルダーの `state.json` に、最後にログインへ使った TOTP の時間枠（`last_otp_step`）だけを保存する。秘密は含まない。
 - **パッケージアプリ配下での注意**：MSIX パッケージのアプリ（例：Claude デスクトップ）から起動したプロセスでは `%LOCALAPPDATA%` への新規書込みが `Packages\<pkg>\LocalCache\Local` へ振り替えられ、通常の端末とキャッシュ・`state.json` が別になる。その場合は余分なログインが起こり得て、TOTP 時間枠の記録も別々になる（同じ枠を二重に使うとログインが拒否されるだけで、自動再試行はしない）。共有したいときは `SIGILUNE_HOME` で同じ実フォルダーを指定する。資格情報マネージャーは振替えの対象外で共通。
@@ -62,9 +62,10 @@ signtool はマニフェストの XML 署名を作れないため、MSBuild の 
 - 同梱の中間証明書は署名者の発行者と一致したものだけをチェーン用ストアへ追加する。
 - `ssign-core` は完全一致（`=0.1.8`）で固定する。上げるときは本番アカウントで exe と MSIX の署名・検証をやり直す。
 - テスト用ローカル鍵バックエンドは dlib のメタデータ（`/dmdf`）で `local_key_pem` と `local_cert` を両方指定したときだけ使われる。
-- タグと GitHub Release は使わない。リリース（`release.yml`）は `release/<version>` ブランチの push（と、同じブランチでの手動再実行）でだけ起動する。ブランチ名とクレートの版が違えば止める。署名・配信用 Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`・`CLOUDFLARE_API_TOKEN`）は Environment `release`（`release/*` ブランチだけ許可）にだけ置く。
+- GitHub Release は使わない。リリース（`release.yml`）は main のコミットに付けた軽量タグ `v<version>` の push（と、同じタグでの手動再実行 `gh workflow run release.yml --ref v<version>`）でだけ起動する。Environment も Secrets も持たない `guard` ジョブが、タグであること・厳密な `v<x.y.z>` の形・軽量タグで SHA が一致すること・既定ブランチ（main）の祖先であること・`Cargo.toml` の版との一致を確かめ、通らなければ止める。署名・配信用 Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`・`CLOUDFLARE_API_TOKEN`）は Environment `release`（版タグ `v[0-9]*.[0-9]*.[0-9]*` だけ許可）にだけ置く。
+- 移動タグ `v1` は、その版の R2 配信が成功した commit へだけ動かす（配信前・失敗した commit へは動かさない。`release.yml` は動かさず、リリース担当が成功を確認してから動かす）。他リポジトリの `uses: 1llum1n4t1s/Sigilune@v1` はこのタグを指す。`v1` は版タグの形ではないので `release.yml` は起動しない。
 - 配布は Cloudflare R2（バケット `sigilune-updates`、公開 `https://sigilune.kagayoi.com`）が唯一の入口。置き場は `<ver>/sigilune-<ver>-win-x64.zip` と `.sha256`（版付き・不変）、固定名フィード `latest.json`（`{"version","zip","sha256"}`。zip と sha256 は公開 URL からの相対キー）。`scripts/Publish-R2.ps1` が、版付きファイル → 公開 URL での照合 → `latest.json` の順に置き、固定名だけ purge する。同じ版が既にあって内容が違えば上書きせず失敗（同一なら成功で再実行できる）、R2 の `latest.json` が今回より新しい版なら更新しない（後退防止）。転送の実装は Edictora と同じ `R2Transfer.Core.cs` / `R2Distribution.Common.ps1` の同梱コピー。
-- `install.ps1` は R2 から取る（`-Version` 指定なら版付きの zip と `.sha256`、未指定なら `latest.json`）。https 限定（テスト用のループバックだけ http 可）、リダイレクトは辿らず、`.sha256` と署名者（CN）の照合は維持する。`action.yml` は `$GITHUB_ACTION_PATH` の `Cargo.toml` の版を入れる（`inputs.version` 優先）ため、`uses: …@<SHA>` がそのまま版固定になる。`github.action_ref` は使わない。
+- `install.ps1` は R2 から取る（`-Version` 指定なら版付きの zip と `.sha256`、未指定なら `latest.json`）。https 限定（テスト用のループバックだけ http 可）、リダイレクトは辿らず、`.sha256` と署名者（CN）の照合は維持する。`action.yml` は `$GITHUB_ACTION_PATH` の `Cargo.toml` の版を入れる（`inputs.version` 優先）ため、`uses: …@v1`（移動タグ）が指す commit の版が入る（完全固定したい利用者は `@<SHA>`）。`github.action_ref` は使わない。
 
 ## 検証済みの事実（2026-11-13）
 

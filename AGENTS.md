@@ -43,6 +43,6 @@ pwsh -File tests/Test-Install.ps1 -WorkDirectory <空の作業フォルダー>
 - dlib の FFI 契約（`HeapAlloc(GetProcessHeap())`、証明書の所有権移譲、SHA-256 のみ、パニック捕捉）を崩さない。
 - セッションの排他・TOTP 時間枠の記録・自動再試行なしを崩さない（並列署名と Certum のコード再利用拒否に対応するため）。
 - `dotnet/Sigilune.Manifest` は MSBuild の `mansign2.cs`（MIT）の移植。署名 XML の組み立て順序と改行の扱いを変えると `mage.exe` との一致テストが崩れるので、変えるときはテストで確認する。補助ツールの版は release.yml が Cargo の版を渡す。
-- 配布は Cloudflare R2 だけで、タグと GitHub Release は使わない。リリースは `release/<version>` ブランチの push で `release.yml` が署名・配信する（ブランチ名と `Cargo.toml` の版は一致させる）。`install.ps1` / `action.yml` / `scripts/Publish-R2.ps1` / `scripts/R2*` を変えたら `tests/Test-Install.ps1` を通す。`R2Transfer.Core.cs` と `R2Distribution.Common.ps1` は Edictora と共通の同梱コピーなので、片方だけ直さない。
+- 配布は Cloudflare R2 だけで、GitHub Release は使わない。リリースは main のコミットに付けた軽量タグ `v<version>` の push で `release.yml` が署名・配信する（`guard` ジョブがタグの形・軽量タグ・main の祖先・`Cargo.toml` の版との一致を確かめる）。移動タグ `v1` は、その版の R2 配信が成功した commit へだけ動かし（`release.yml` は動かさない）、他リポジトリは `uses: 1llum1n4t1s/Sigilune@v1` で参照する。`install.ps1` / `action.yml` / `scripts/Publish-R2.ps1` / `scripts/R2*` を変えたら `tests/Test-Install.ps1` を通す。`R2Transfer.Core.cs` と `R2Distribution.Common.ps1` は Edictora と共通の同梱コピーなので、片方だけ直さない。
 - `release.yml` の配信 step で `$LASTEXITCODE` を見ない。`Publish-R2.ps1` は失敗を例外で知らせ、この step ではネイティブコマンドを実行しないため `$LASTEXITCODE` は未設定（`$null`）で、`-ne 0` を見ると成功時にも誤って失敗扱いになる。
 - MCP・別 OS 対応・ARM64 は未実装。追加するときは DESIGN.md を更新する。

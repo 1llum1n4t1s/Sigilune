@@ -6,22 +6,22 @@ branding:
   color: purple
 
 # 使い方（ワークフロー側）:
-#   - uses: 1llum1n4t1s/Sigilune@<完全なコミット SHA> # 1.1.4
+#   - uses: 1llum1n4t1s/Sigilune@v1
 #   - run: sigilune sign dist\MyApp.exe
 #     env:
 #       SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
 #       SIGILUNE_TOTP_URI: ${{ secrets.SIGILUNE_TOTP_URI }}
-# Secrets はブランチを制限した Environment に置き、署名するジョブで `environment:` を指定する。
+# Secrets は配信タグ（または配信ブランチ）を制限した Environment に置き、署名するジョブで `environment:` を指定する。
 #
-# 入れる版の決め方（タグも GitHub Release も使わない。配布物は R2 の https://sigilune.kagayoi.com にある）:
+# 入れる版の決め方（GitHub Release は使わない。配布物は R2 の https://sigilune.kagayoi.com にある）:
 #   1. inputs.version を指定 → その版（"latest" なら R2 の latest.json の版）
 #   2. 指定なし → このアクション自身のチェックアウト（$GITHUB_ACTION_PATH）の Cargo.toml の版
-#      uses: …@<SHA> で参照したコミットが入れる版を決めるので、SHA 固定がそのまま版固定になる
-#      （参照の書き方・github.action_ref には依存しない）。参照を新しい SHA へ更新すると版も上がる。
+#      uses: …@v1 で参照したコミット（移動タグ v1 は、R2 配信が成功した最新版の commit）が入れる版を決める
+#      （github.action_ref には依存しない）。完全に固定したい利用者は @<完全なコミット SHA> も使える。
 
 inputs:
   version:
-    description: Version to install (e.g. 1.0.0) or "latest". Default - the version in the checked-out action (Cargo.toml), so a commit SHA pins the version.
+    description: Version to install (e.g. 1.0.0) or "latest". Default - the version in the checked-out action (Cargo.toml), so the commit behind the @v1 tag (or a pinned SHA) decides the version.
     required: false
     default: ''
 

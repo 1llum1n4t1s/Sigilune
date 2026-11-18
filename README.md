@@ -68,7 +68,7 @@ sigilune sign .\MyApp.exe
 
 ## GitHub Actions
 
-Use the bundled action on a Windows runner. Put the two secrets in an **Environment limited to your release branches** (Settings → Environments → Deployment branches and tags) and reference it from the signing job. Adding required reviewers makes every run wait for your approval; leave them out if releases should finish unattended:
+Use the bundled action on a Windows runner. Put the two secrets in an **Environment limited to your release tags** (or release branches) (Settings → Environments → Deployment branches and tags) and reference it from the signing job. Adding required reviewers makes every run wait for your approval; leave them out if releases should finish unattended:
 
 ```yaml
 jobs:
@@ -78,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # ... build ...
-      - uses: 1llum1n4t1s/Sigilune@<full commit SHA>   # 1.1.4
+      - uses: 1llum1n4t1s/Sigilune@v1
       - run: sigilune sign dist\MyApp.exe dist\MyApp.msix
         env:
           SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
@@ -91,14 +91,15 @@ Which binary the action installs:
 
 | `uses:` | Installs |
 | --- | --- |
-| `1llum1n4t1s/Sigilune@<full commit SHA>` | The version written in `Cargo.toml` at that commit, so the SHA pins the version (there are no release tags; Dependabot can bump the SHA) |
+| `1llum1n4t1s/Sigilune@v1` | The version written in `Cargo.toml` at the commit the moving `v1` tag points to: the newest published version. `v1` only moves to a commit whose R2 release succeeded |
+| `1llum1n4t1s/Sigilune@<full commit SHA>` | The version written in `Cargo.toml` at that commit, so the SHA pins the version exactly (the SHA must be a commit of a published version) |
 | `with: version: 1.2.3` | That version, whatever the action ref |
 | `with: version: latest` | The newest version in `latest.json` (not reproducible) |
 
 ## Updating
 
 - **Your PC**: run the install command again. It replaces the binaries in place and keeps your registration (Credential Manager) and settings. `sigilune --version` shows the installed version.
-- **GitHub Actions**: the commit SHA in `uses:` decides the version. Bump the SHA to update (Dependabot's `github-actions` updater does this for you). The SHA you pin must be a commit of a version that has been published.
+- **GitHub Actions**: with `uses: 1llum1n4t1s/Sigilune@v1` you follow the newest published version automatically. To pin exactly, use a full commit SHA of a published version and bump it to update (Dependabot's `github-actions` updater does this for you).
 
 ## Commands
 
@@ -156,7 +157,7 @@ sigilune sign-manifest --application ".\publish\Application Files\MyAddIn_1_0_0_
 
 | Variable | Purpose |
 | --- | --- |
-| `SIGILUNE_EMAIL` + `SIGILUNE_TOTP_URI` | Account e-mail and `otpauth://` URI for CI, used instead of Credential Manager. Set both or neither. On GitHub Actions, keep them as secrets of an Environment limited to your release branches. |
+| `SIGILUNE_EMAIL` + `SIGILUNE_TOTP_URI` | Account e-mail and `otpauth://` URI for CI, used instead of Credential Manager. Set both or neither. On GitHub Actions, keep them as secrets of an Environment limited to your release tags. |
 | `SIGILUNE_SIGNTOOL` | Path to `signtool.exe` (default: newest Windows SDK). |
 | `SIGILUNE_DLIB` | Path to `sigilune_dlib.dll` (default: next to `sigilune.exe`). |
 | `SIGILUNE_CREDENTIAL` | Credential Manager entry name (default `Sigilune/Certum SimplySign`); use different names for several accounts. |

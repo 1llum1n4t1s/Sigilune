@@ -4,7 +4,7 @@
 署名済みの配布 zip を Cloudflare R2（sigilune-updates / https://sigilune.kagayoi.com）へ配信する。
 
 .DESCRIPTION
-release.yml（release/* ブランチの push）から呼ぶ。GitHub Release もタグも使わず、R2 を唯一の配布元にする。
+release.yml（main のコミットへの版タグ v<版> の push）から呼ぶ。GitHub Release は使わず、R2 を唯一の配布元にする。
 
 置き場（バケット直下）:
   <ver>/sigilune-<ver>-win-x64.zip          版付き・不変（immutable）
