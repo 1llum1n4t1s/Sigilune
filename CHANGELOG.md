@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.1.5 - 2026-11-18
+
+### 変更
+
+- 配信の起動を `release/<version>` ブランチの push から、main のコミットに付けた軽量タグ `v<version>` の push へ変えた。GitHub Release は引き続き使わない。配信 workflow は、Secrets を持たない guard で、タグの形・軽量タグ・main の祖先・`Cargo.toml` の版との一致を確かめてから署名・配信する。
+- 移動タグ `v1` を再び置き、利用側は `uses: 1llum1n4t1s/Sigilune@v1` で参照する。`v1` は R2 配信が成功したコミットへだけ動かし、管理者だけが作成・移動できるようルールセットで保護する。
+
 ## 1.1.4 - 2026-11-18
 
 ### 修正
