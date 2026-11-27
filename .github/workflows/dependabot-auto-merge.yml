@@ -42,6 +42,7 @@ jobs:
         env:
           REQUIRED_WORKFLOWS: '[".github/workflows/ci.yml"]'
           EXCLUDED_PATHS: '[]'
+          HELD_DEPENDENCIES: '["ssign-core","reqwest"]'
         with:
           script: |
             // GitHub Actions の信頼済み既定ブランチ上で実行する。PR のコードは実行しない。
@@ -63,6 +64,7 @@ jobs:
               return current;
             };
             const excluded = JSON.parse(process.env.EXCLUDED_PATHS || '[]');
+            const heldDependencies = JSON.parse(process.env.HELD_DEPENDENCIES || '[]');
             const held = (pr, reason) => {
               core.info(`#${pr.number}: ${reason}`);
               report.push(`- #${pr.number}: ${reason}`);
@@ -160,6 +162,16 @@ jobs:
               // PRのbase.shaは作成時点の値を返すことがあるため、既定ブランチを直接取得する。
               const baseSha = (await github.rest.repos.getBranch({owner, repo, branch})).data.commit.sha;
               const files = await github.paginate(github.rest.pulls.listFiles, {owner, repo, pull_number: pr.number, per_page: 100});
+              // 単独 PR のブランチ名（dependabot/cargo/<名前>-<版>）かタイトル（bump <名前> from）が完全一致する依存は手動で取り込む。
+              const heldName = heldDependencies.find(name => {
+                const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                return new RegExp(`^dependabot/[^/]+/(?:.*/)?${escaped}-\\d`).test(pr.head.ref)
+                  || new RegExp(`\\bbump ${escaped} from\\b`, 'i').test(pr.title);
+              });
+              if (heldName) {
+                held(pr, `${heldName} は本番署名の検証後に手動で取り込む（AGENTS.md）`);
+                continue;
+              }
               const blocked = files.find(file => excluded.some(prefix => file.filename.startsWith(prefix) || file.previous_filename?.startsWith(prefix)));
               if (blocked) {
                 held(pr, `自動マージ対象外のパス (${blocked.filename}) を含むため手動で確認`);
